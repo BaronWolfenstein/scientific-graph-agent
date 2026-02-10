@@ -1,7 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "scientific_agent": "agent_graph.graph:graph"
+    "scientific_agent": "agent_graph.graph:graph",
+    "paper_recommender": "paper_recommender.graph:graph"
   },
   "env": ".env",
   "python_version": "3.11"

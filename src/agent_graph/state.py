@@ -54,7 +54,6 @@ def summarize_messages(
         existing: List[BaseMessage],
         new: List[BaseMessage],
         min_message: int = 3,
-        llm_model_name = "gpt-4o-mini",
         llm_temperature: int = 1,
         ) -> List[BaseMessage]:
     """
@@ -66,7 +65,6 @@ def summarize_messages(
         existing: Previously stored messages
         new: Newly added messages
         min_message: Minimum number of recent messages to keep (default: 3)
-        llm_model_name: Model to use for summarization (default: gpt-4o-mini)
         llm_temperature: Temperature for summarization (default: 1)
 
     Returns:
@@ -115,7 +113,6 @@ class OutputState(TypedDict):
     messages: Annotated[List[BaseMessage], lambda e, n: summarize_messages(
         e, n,
         min_message=3,
-        llm_model_name="claude-sonnet-4-6",
         llm_temperature=1)]  # Conversation history
 
 # === INTERNAL WORKING STATE ===

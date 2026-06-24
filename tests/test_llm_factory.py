@@ -1,10 +1,6 @@
 import os
-import sys
 import pytest
 from unittest.mock import patch, MagicMock
-
-# Import directly from the file to avoid loading the entire package
-sys.path.insert(0, '/Users/noahrahman/git/scientific-graph-agent/src')
 
 @pytest.fixture(autouse=True)
 def mock_anthropic_api_key(monkeypatch):

@@ -114,6 +114,8 @@ class OutputState(TypedDict):
         e, n,
         min_message=3,
         llm_temperature=1)]  # Conversation history
+    clinician_summary: NotRequired[dict]  # Structured clinician-facing summary
+    technical_summary: NotRequired[dict]  # Structured technical/researcher-facing summary
 
 # === INTERNAL WORKING STATE ===
 

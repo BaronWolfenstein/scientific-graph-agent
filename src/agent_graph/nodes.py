@@ -2,10 +2,13 @@
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.types import interrupt
 import asyncio
+import json as _json
+from pydantic import ValidationError
 
 from agent_graph.llm import get_llm
 from agent_graph.state import InputState, OutputState, PrivateState, InternalState
 from agent_graph.tools import search_arxiv, search_arxiv_streaming, search_wikipedia, search_wikipedia_streaming, search_pubmed
+from agent_graph.schemas import ClinicianSummary, TechnicalSummary, Evidence
 
 
 import logging
@@ -761,4 +764,161 @@ def route_after_approval(state: InternalState) -> str:
     if state.get("approved", False):
         return "researcher"  # Approved - continue to search
     return "end"  # Cancelled - stop here
+
+
+# ============================================================================
+# JSON HELPERS FOR STRUCTURED OUTPUT
+# ============================================================================
+
+def _extract_json(text: str) -> str:
+    """Strip markdown code fence (```json ... ```) if present, return bare JSON."""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Drop opening fence line and closing fence line
+        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+        text = "\n".join(inner)
+    return text.strip()
+
+
+def _generate_with_retry(llm, messages: list, schema_cls) -> tuple:
+    """
+    Prompt llm with messages, validate response against schema_cls.
+    On ValidationError, re-prompts once with the error fed back.
+
+    Returns:
+        (instance, first_error_str_or_None)
+    """
+    response = llm.invoke(messages)
+    raw = response.content
+    json_str = _extract_json(raw)
+    try:
+        return schema_cls.model_validate_json(json_str), None
+    except (ValidationError, Exception) as e:
+        first_err = str(e)
+        retry_messages = messages + [
+            AIMessage(content=raw),
+            HumanMessage(
+                content=(
+                    f"The JSON you returned has validation errors:\n{first_err}\n\n"
+                    "Please fix ALL errors and return ONLY valid JSON conforming to the schema. "
+                    "No markdown fences, no explanation."
+                ),
+                name="User"
+            )
+        ]
+        retry_response = llm.invoke(retry_messages)
+        retry_json = _extract_json(retry_response.content)
+        validated = schema_cls.model_validate_json(retry_json)
+        return validated, first_err
+
+
+# ============================================================================
+# DUAL-AUDIENCE STRUCTURED-OUTPUT NODE
+# ============================================================================
+
+def dual_audience_node(state: InternalState) -> dict:
+    """
+    Generates two Pydantic-validated summaries from retrieved papers:
+      - ClinicianSummary: actionable bottom-line for clinicians
+      - TechnicalSummary: detailed methodology + caveats for researchers
+
+    Retries once per schema on validation failure (schema-failure retry pattern).
+    Only cites PMIDs present in the retrieved papers (grounding constraint).
+    """
+    papers = state.get("papers", [])
+    query = state["query"]
+
+    llm = get_llm(temperature=state.get("llm_temperature", 0))
+
+    # Build grounded paper context — list PMIDs explicitly so the model knows which to cite
+    papers_context = "\n\n".join([
+        f"PMID: {p.get('pmid', p['id'])}\n"
+        f"Title: {p['title']}\n"
+        f"Authors: {', '.join(p['authors'][:3])}\n"
+        f"Published: {p['published']}\n"
+        f"Abstract: {p['summary'][:500]}\n"
+        f"URL: {p['url']}"
+        for p in papers
+    ])
+
+    allowed_pmids = [p.get("pmid", p["id"]) for p in papers]
+    allowed_str = ", ".join(allowed_pmids)
+
+    grounding_rule = (
+        f"GROUNDING RULE: You MUST only cite PMIDs from this set: [{allowed_str}]. "
+        "If evidence is insufficient for a claim, say so explicitly. "
+        "Do NOT invent PMIDs or URLs."
+    )
+
+    # --- Clinician summary ---
+    clinician_schema_str = """{
+  "audience": "clinician",
+  "bottom_line": "<one-sentence actionable takeaway>",
+  "key_findings": ["<finding 1>", "..."],
+  "evidence": [{"claim": "<claim>", "pmid": "<pmid>", "source_url": "https://pubmed.ncbi.nlm.nih.gov/<pmid>/"}],
+  "confidence_note": "<what is and isn't well-supported>"
+}"""
+
+    clinician_messages = [
+        SystemMessage(content=(
+            f"You are a clinical evidence synthesizer writing for a treating physician.\n"
+            f"{grounding_rule}\n"
+            "Return ONLY valid JSON matching this schema (no markdown fence):\n"
+            f"{clinician_schema_str}"
+        )),
+        HumanMessage(content=(
+            f"Clinical question: {query}\n\n"
+            f"Retrieved papers:\n{papers_context}\n\n"
+            "Generate the clinician summary JSON."
+        ), name="User")
+    ]
+
+    clinician_result, clinician_retry_err = _generate_with_retry(
+        llm, clinician_messages, ClinicianSummary
+    )
+    if clinician_retry_err:
+        logging.warning(f"ClinicianSummary required retry: {clinician_retry_err[:100]}")
+
+    # --- Technical summary ---
+    technical_schema_str = """{
+  "audience": "technical",
+  "detailed_findings": "<detailed findings paragraph>",
+  "methodology_notes": "<study design, N, endpoints, methods>",
+  "evidence": [{"claim": "<claim>", "pmid": "<pmid>", "source_url": "https://pubmed.ncbi.nlm.nih.gov/<pmid>/"}],
+  "caveats": ["<caveat 1>", "..."]
+}"""
+
+    technical_messages = [
+        SystemMessage(content=(
+            f"You are a research methodologist writing for a clinical scientist or statistician.\n"
+            f"{grounding_rule}\n"
+            "Return ONLY valid JSON matching this schema (no markdown fence):\n"
+            f"{technical_schema_str}"
+        )),
+        HumanMessage(content=(
+            f"Research question: {query}\n\n"
+            f"Retrieved papers:\n{papers_context}\n\n"
+            "Generate the technical summary JSON."
+        ), name="User")
+    ]
+
+    technical_result, technical_retry_err = _generate_with_retry(
+        llm, technical_messages, TechnicalSummary
+    )
+    if technical_retry_err:
+        logging.warning(f"TechnicalSummary required retry: {technical_retry_err[:100]}")
+
+    logging.info("Dual-audience summaries generated")
+
+    return {
+        "clinician_summary": clinician_result.model_dump(),
+        "technical_summary": technical_result.model_dump(),
+        "messages": [
+            AIMessage(
+                content="Generated clinician + technical structured summaries.",
+                name="DualAudience"
+            )
+        ]
+    }
 

@@ -6,6 +6,12 @@ from langgraph.config import get_stream_writer
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import asyncio
+import json
+import urllib.request
+import urllib.parse
+import xml.etree.ElementTree as ET
+
+NCBI_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
 # Create a thread pool executor that will be reused
 _executor = None
@@ -320,3 +326,84 @@ async def search_wikipedia_streaming(topic: str, sentences: int = 5) -> dict:
         writer = None
 
     return await _fetch_wikipedia_summary_async(topic, sentences, writer)
+
+
+def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
+    """Fetch PubMed results via NCBI E-utilities (esearch + efetch). No extra deps."""
+    # Step 1: esearch — get PMIDs
+    params = urllib.parse.urlencode({
+        "db": "pubmed",
+        "term": query,
+        "retmax": max_results,
+        "retmode": "json",
+    })
+    esearch_url = f"{NCBI_BASE}/esearch.fcgi?{params}"
+    with urllib.request.urlopen(esearch_url, timeout=15) as r:
+        data = json.loads(r.read())
+    pmids = data.get("esearchresult", {}).get("idlist", [])
+    if not pmids:
+        return []
+
+    # Step 2: efetch — get full records as XML
+    params = urllib.parse.urlencode({
+        "db": "pubmed",
+        "id": ",".join(pmids),
+        "rettype": "abstract",
+        "retmode": "xml",
+    })
+    efetch_url = f"{NCBI_BASE}/efetch.fcgi?{params}"
+    with urllib.request.urlopen(efetch_url, timeout=15) as r:
+        xml_data = r.read()
+
+    root = ET.fromstring(xml_data)
+    papers = []
+    for article in root.findall(".//PubmedArticle"):
+        pmid_el = article.find(".//PMID")
+        title_el = article.find(".//ArticleTitle")
+        abstract_el = article.find(".//AbstractText")
+        year = article.findtext(".//PubDate/Year", "N/A")
+
+        author_els = article.findall(".//Author")
+        authors = []
+        for a in author_els[:5]:
+            ln = a.findtext("LastName", "")
+            fn = a.findtext("ForeName", "")
+            if ln:
+                authors.append(f"{fn} {ln}".strip() if fn else ln)
+
+        pmid = pmid_el.text if pmid_el is not None else ""
+        # ArticleTitle may contain sub-elements (e.g. <i>); collect all text
+        title = "".join(title_el.itertext()) if title_el is not None else "Unknown Title"
+        abstract = abstract_el.text if abstract_el is not None else ""
+
+        papers.append({
+            "id": pmid,
+            "pmid": pmid,
+            "title": title,
+            "authors": authors if authors else ["Unknown"],
+            "summary": abstract,
+            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+            "published": year,
+            "source": "pubmed",
+        })
+    return papers
+
+
+@tool
+def search_pubmed(query: str, max_results: int = 5) -> list[dict]:
+    """
+    Search PubMed for biomedical literature via NCBI E-utilities.
+
+    Returns title, abstract, PMID, URL, and author list per result.
+    Use for clinical and biomedical questions.
+
+    Args:
+        query: Search terms (e.g., "CAR-T cell lymphoma clinical trial")
+        max_results: Maximum number of results to return (default: 5)
+
+    Returns:
+        List of papers with keys: id, pmid, title, authors, summary, url, published, source
+    """
+    executor = _get_executor()
+    future = executor.submit(_fetch_pubmed_results, query, max_results)
+    return future.result()

@@ -5,7 +5,7 @@ import asyncio
 
 from agent_graph.llm import get_llm
 from agent_graph.state import InputState, OutputState, PrivateState, InternalState
-from agent_graph.tools import search_arxiv, search_arxiv_streaming, search_wikipedia, search_wikipedia_streaming
+from agent_graph.tools import search_arxiv, search_arxiv_streaming, search_wikipedia, search_wikipedia_streaming, search_pubmed
 
 
 import logging
@@ -36,6 +36,12 @@ TOOL_REGISTRY = {
         "async": search_wikipedia_streaming,
         "description": "Wikipedia articles",
         "param_name": "topic"
+    },
+    "pubmed": {
+        "sync": search_pubmed,
+        "async": None,
+        "description": "PubMed biomedical literature",
+        "param_name": "query"
     }
 }
 
@@ -284,6 +290,55 @@ Relevance Score (1-100):""", name="User")
             AIMessage(
                 content=message_content,
                 name="WikipediaResearcher"
+            )
+        ]
+    }
+
+
+def pubmed_researcher_node(state: InternalState) -> OutputState:
+    """PubMed researcher node: searches PubMed and scores paper relevance."""
+    max_papers = state.get("max_papers", 5)
+    query = state["refined_query"]
+    original_query = state["query"]
+    iteration = state.get("iteration", 0)
+
+    logging.info(f"Searching PubMed: '{query}' (iteration {iteration})")
+    papers = search_pubmed.invoke({"query": query, "max_results": max_papers})
+    logging.info(f"Found {len(papers)} PubMed papers")
+
+    llm = get_llm(temperature=state.get("llm_temperature", 0))
+
+    scored_papers = []
+    for paper in papers:
+        score_messages = [
+            SystemMessage(content="""You are a research relevance evaluator.
+Score how relevant a paper is to the user's query on a scale from 1 to 100.
+Consider: direct relevance, depth of content, usefulness for answering the query.
+Respond with ONLY a number between 1 and 100, nothing else."""),
+            HumanMessage(content=f"""User Query: {original_query}
+
+Paper Title: {paper['title']}
+Authors: {', '.join(paper['authors'][:3])}
+Abstract: {paper['summary'][:500]}
+
+Relevance Score (1-100):""", name="User")
+        ]
+        response = llm.invoke(score_messages)
+        try:
+            relevance_score = int(response.content.strip())
+        except ValueError:
+            relevance_score = 50
+        paper['relevance_score'] = max(1, min(100, relevance_score))
+        scored_papers.append(paper)
+        logging.info(f"  📄 {paper['title'][:60]}... - Score: {paper['relevance_score']}")
+
+    return {
+        "papers": scored_papers,
+        "iteration": iteration + 1,
+        "messages": [
+            AIMessage(
+                content=f"Found {len(scored_papers)} papers on PubMed for query: {query}",
+                name="PubMedResearcher"
             )
         ]
     }

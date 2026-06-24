@@ -1,9 +1,9 @@
 """Graph nodes: clarifier, researcher, and summarizer."""
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.types import interrupt
 import asyncio
 
+from agent_graph.llm import get_llm
 from agent_graph.state import InputState, OutputState, PrivateState, InternalState
 from agent_graph.tools import search_arxiv, search_arxiv_streaming, search_wikipedia, search_wikipedia_streaming
 
@@ -51,10 +51,7 @@ def clarifier_node(state: InternalState) -> PrivateState:
     conversation_history = state.get("messages", [])
     num_queries = state.get("num_queries", 1)  # Check if multi-query mode is requested
 
-    llm = ChatOpenAI(
-        model=state.get("llm_model", "gpt-4o-mini"),
-        temperature=state.get("llm_temperature", 0.3 if num_queries > 1 else 0)
-    )
+    llm = get_llm(temperature=state.get("llm_temperature", 0.3 if num_queries > 1 else 0))
 
     logging.info(f"Clarifying query: '{original_query}' (num_queries={num_queries})")
 
@@ -169,11 +166,10 @@ def arxiv_researcher_node(state: InternalState) -> OutputState:
     papers = search_arxiv.invoke({"query": query, "max_results": max_papers})
     logging.info(f"Found {len(papers)} papers")
 
-    llm_model = state.get("llm_model", "gpt-4o-mini")
     llm_temperature = state.get("llm_temperature", 0)
 
     # Score each paper's relevance using LLM
-    llm = ChatOpenAI(model=llm_model, temperature=llm_temperature)
+    llm = get_llm(temperature=llm_temperature)
 
     logging.info(f"Scoring paper relevance...")
 
@@ -234,11 +230,10 @@ def wikipedia_researcher_node(state: InternalState) -> OutputState:
     if result.get("success"):
         logging.info(f"Found Wikipedia article: {result['title']}")
 
-        llm_model = state.get("llm_model", "gpt-4o-mini")
         llm_temperature = state.get("llm_temperature", 0)
 
         # Score the article's relevance using LLM
-        llm = ChatOpenAI(model=llm_model, temperature=llm_temperature)
+        llm = get_llm(temperature=llm_temperature)
 
         score_messages = [
             SystemMessage(content="""You are a research relevance evaluator.
@@ -298,15 +293,14 @@ def summarizer_node(state: InternalState) -> OutputState:
     """Summarizer node: analyzes papers and generates a concise summary."""
 
     max_iterations = state.get("max_iterations", 2)
-    llm_model = state.get("llm_model", "gpt-4o-mini")
     llm_temperature = state.get("llm_temperature", 0)
-    
-    llm = ChatOpenAI(model=llm_model,temperature=llm_temperature)
-    
+
+    llm = get_llm(temperature=llm_temperature)
+
     papers = state["papers"]
     query = state["query"]
     iteration = state["iteration"]
-    
+
     if len(papers) < 3 and iteration < max_iterations:
         logging.info(f"⚠️  Only {len(papers)} papers found, will retry search...")
         return {
@@ -410,11 +404,10 @@ async def arxiv_researcher_node_streaming(state: InternalState) -> OutputState:
     papers = await search_arxiv_streaming.ainvoke({"query": query, "max_results": max_papers})
     logging.info(f"Found {len(papers)} papers")
 
-    llm_model = state.get("llm_model", "gpt-4o-mini")
     llm_temperature = state.get("llm_temperature", 0)
 
     # Score each paper's relevance using LLM with streaming
-    llm = ChatOpenAI(model=llm_model, temperature=llm_temperature)
+    llm = get_llm(temperature=llm_temperature)
 
     logging.info(f"Scoring paper relevance...")
 
@@ -508,11 +501,10 @@ async def wikipedia_researcher_node_streaming(state: InternalState) -> OutputSta
     if result.get("success"):
         logging.info(f"Found Wikipedia article: {result['title']}")
 
-        llm_model = state.get("llm_model", "gpt-4o-mini")
         llm_temperature = state.get("llm_temperature", 0)
 
         # Score the article's relevance using LLM
-        llm = ChatOpenAI(model=llm_model, temperature=llm_temperature)
+        llm = get_llm(temperature=llm_temperature)
 
         score_messages = [
             SystemMessage(content="""You are a research relevance evaluator.
@@ -576,10 +568,9 @@ async def summarizer_node_streaming(state: InternalState) -> OutputState:
     """
     max_iterations = state.get("max_iterations", 2)
 
-    llm_model = state.get("llm_model", "gpt-4o-mini")
     llm_temperature = state.get("llm_temperature", 0)
 
-    llm = ChatOpenAI(model=llm_model, temperature=llm_temperature)
+    llm = get_llm(temperature=llm_temperature)
 
     papers = state["papers"]
     query = state["query"]

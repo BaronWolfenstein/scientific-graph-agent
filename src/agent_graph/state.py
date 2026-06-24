@@ -1,9 +1,13 @@
 """Shared state between graph nodes."""
 from typing import TypedDict, List, Annotated
-from typing import NotRequired
+try:
+    from typing import NotRequired
+except ImportError:
+    from typing_extensions import NotRequired
 from operator import add
 from langchain_core.messages import BaseMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+
+from agent_graph.llm import get_llm
 
 # === REDUCERS ===
 
@@ -78,7 +82,7 @@ def summarize_messages(
     old_messages = combined[:-min_message]
     recent_messages = combined[-min_message:]
 
-    llm = ChatOpenAI(model=llm_model_name, temperature=llm_temperature)
+    llm = get_llm(temperature=llm_temperature)
 
     # Build proper message list for LLM
     messages_to_summarize = [
@@ -111,7 +115,7 @@ class OutputState(TypedDict):
     messages: Annotated[List[BaseMessage], lambda e, n: summarize_messages(
         e, n,
         min_message=3,
-        llm_model_name="gpt-4o-mini",
+        llm_model_name="claude-sonnet-4-6",
         llm_temperature=1)]  # Conversation history
 
 # === INTERNAL WORKING STATE ===

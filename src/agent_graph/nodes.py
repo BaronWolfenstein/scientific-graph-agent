@@ -922,3 +922,84 @@ def dual_audience_node(state: InternalState) -> dict:
         ]
     }
 
+
+# ============================================================================
+# HITL APPROVAL GATE
+# ============================================================================
+
+def hitl_approval_node(state: InternalState) -> dict:
+    """
+    Interrupts the graph so a human can review both draft summaries before
+    they are finalized. Uses LangGraph's interrupt() — graph resumes when
+    Command(resume={"action": "approve"|"reject"}) is passed to invoke().
+    """
+    cs = state.get("clinician_summary", {})
+    ts = state.get("technical_summary", {})
+
+    def _fmt_clinician(cs: dict) -> str:
+        lines = [
+            "── CLINICIAN SUMMARY ─────────────────────────────────",
+            f"Bottom line : {cs.get('bottom_line', '')}",
+            "",
+            "Key findings:",
+        ]
+        for f in cs.get("key_findings", []):
+            lines.append(f"  • {f}")
+        lines += [
+            "",
+            f"Confidence : {cs.get('confidence_note', '')}",
+            "",
+            "Evidence cited:",
+        ]
+        for e in cs.get("evidence", []):
+            lines.append(f"  [{e.get('pmid','')}] {e.get('claim','')} — {e.get('source_url','')}")
+        return "\n".join(lines)
+
+    def _fmt_technical(ts: dict) -> str:
+        lines = [
+            "── TECHNICAL SUMMARY ─────────────────────────────────",
+            ts.get("detailed_findings", ""),
+            "",
+            f"Methodology : {ts.get('methodology_notes', '')}",
+            "",
+            "Caveats:",
+        ]
+        for c in ts.get("caveats", []):
+            lines.append(f"  • {c}")
+        lines += ["", "Evidence cited:"]
+        for e in ts.get("evidence", []):
+            lines.append(f"  [{e.get('pmid','')}] {e.get('claim','')} — {e.get('source_url','')}")
+        return "\n".join(lines)
+
+    display = _fmt_clinician(cs) + "\n\n" + _fmt_technical(ts)
+
+    decision = interrupt({
+        "type": "summary_approval",
+        "display": display,
+        "message": (
+            "\nReview the draft summaries above.\n"
+            "  approve — finalize and return both summaries\n"
+            "  reject  — discard summaries and end\n"
+        )
+    })
+
+    action = decision.get("action", "reject") if isinstance(decision, dict) else str(decision)
+
+    if action == "approve":
+        logging.info("Summaries approved by reviewer")
+        return {
+            "approved": True,
+            "messages": [AIMessage(content="Summaries approved", name="HITL")]
+        }
+
+    logging.info("Summaries rejected by reviewer")
+    return {
+        "approved": False,
+        "summary": "[REJECTED BY REVIEWER — summaries not finalized]",
+        "messages": [AIMessage(content="Summaries rejected", name="HITL")]
+    }
+
+
+def route_after_hitl(state: InternalState) -> str:
+    return "end"
+

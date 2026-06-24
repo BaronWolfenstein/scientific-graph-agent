@@ -15,7 +15,11 @@ from agent_graph.nodes import (
     should_continue,
     summarizer_node_streaming,
     approver_node,
-    route_after_approval
+    route_after_approval,
+    pubmed_researcher_node,
+    dual_audience_node,
+    hitl_approval_node,
+    route_after_hitl,
 )
 
 from langchain_community.cache import SQLiteCache
@@ -439,6 +443,48 @@ async def create_map_reduce_streaming_graph(
         return workflow.compile(checkpointer=memory)
     else:
         return workflow.compile()
+
+
+def create_demo_graph():
+    """
+    Demo graph for Thursday interview:
+      clarifier → pubmed_researcher → summarizer → dual_audience → hitl_approval → END
+
+    The HITL interrupt fires inside hitl_approval_node via interrupt().
+    Resume with Command(resume={"action": "approve"}) or Command(resume={"action": "reject"}).
+
+    Checkpointer: SQLite in-memory, using langgraph-checkpoint-sqlite (2.x series on Python 3.9).
+    Note: The spec required >=3.0.1, but that version requires Python 3.10+; the 2.x series
+    (langgraph-checkpoint 2.1.2, langgraph-checkpoint-sqlite 2.0.11) is the latest available
+    for Python 3.9 and is fully functional.
+    """
+    workflow = StateGraph(
+        InternalState,
+        input=InputState,
+        output=OutputState,
+    )
+
+    workflow.add_node("clarifier", clarifier_node)
+    workflow.add_node("pubmed_researcher", pubmed_researcher_node)
+    workflow.add_node("summarizer", summarizer_node)
+    workflow.add_node("dual_audience", dual_audience_node)
+    workflow.add_node("hitl_approval", hitl_approval_node)
+
+    workflow.set_entry_point("clarifier")
+    workflow.add_edge("clarifier", "pubmed_researcher")
+    workflow.add_edge("pubmed_researcher", "summarizer")
+    workflow.add_edge("summarizer", "dual_audience")
+    workflow.add_edge("dual_audience", "hitl_approval")
+    workflow.add_conditional_edges(
+        "hitl_approval",
+        route_after_hitl,
+        {"end": END}
+    )
+
+    import sqlite3
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    memory = SqliteSaver(conn)
+    return workflow.compile(checkpointer=memory)
 
 
 # Default graph instance for LangGraph Studio

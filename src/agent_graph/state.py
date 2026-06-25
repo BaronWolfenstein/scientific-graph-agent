@@ -5,7 +5,7 @@ try:
 except ImportError:
     from typing_extensions import NotRequired
 from operator import add
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 
 from agent_graph.llm import get_llm
 
@@ -82,10 +82,15 @@ def summarize_messages(
 
     llm = get_llm(temperature=llm_temperature)
 
-    # Build proper message list for LLM
+    # Flatten old messages into text — Claude requires conversation to end with a HumanMessage
+    history_text = "\n".join(
+        f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {m.content}"
+        for m in old_messages
+    )
     messages_to_summarize = [
-        SystemMessage(content="Summarize this conversation history concisely in 2-3 sentences.")
-    ] + old_messages
+        SystemMessage(content="Summarize this conversation history concisely in 2-3 sentences."),
+        HumanMessage(content=history_text),
+    ]
 
     # Get summary response
     summary_response = llm.invoke(messages_to_summarize)
@@ -114,6 +119,7 @@ class OutputState(TypedDict):
         e, n,
         min_message=3,
         llm_temperature=1)]  # Conversation history
+    refined_query: NotRequired[str]  # Query after clarifier node
     clinician_summary: NotRequired[dict]  # Structured clinician-facing summary
     technical_summary: NotRequired[dict]  # Structured technical/researcher-facing summary
 

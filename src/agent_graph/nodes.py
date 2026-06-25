@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from agent_graph.llm import get_llm
 from agent_graph.state import InputState, OutputState, PrivateState, InternalState
 from agent_graph.tools import search_arxiv, search_arxiv_streaming, search_wikipedia, search_wikipedia_streaming, search_pubmed
+from agent_graph.reranker import score_papers, apply_dropoff, final_relevance_score, CANDIDATE_FETCH
 from agent_graph.schemas import ClinicianSummary, TechnicalSummary, Evidence
 
 
@@ -55,12 +56,11 @@ TOOL_REGISTRY = {
 
 def clarifier_node(state: InternalState) -> PrivateState:
     """Clarifier node: refines and optimizes the user query."""
-
     original_query = state["query"]
     conversation_history = state.get("messages", [])
     num_queries = state.get("num_queries", 1)  # Check if multi-query mode is requested
 
-    llm = get_llm(temperature=state.get("llm_temperature", 0.3 if num_queries > 1 else 0))
+    llm = get_llm(temperature=0)
 
     logging.info(f"Clarifying query: '{original_query}' (num_queries={num_queries})")
 
@@ -73,9 +73,10 @@ Guidelines:
 - Consider the conversation history to understand context
 - Generate {num_queries} different search queries that approach the topic from different angles
 - Each query should target different aspects or related concepts
-- Use technical terminology
+- Use precise technical terminology and domain-specific descriptors rather than generic terms like "survey" or "overview"
 - Keep each query concise (5-10 words max)
 - Ensure queries are complementary, not redundant
+- Do NOT include years, dates, or version numbers — ArXiv treats these as literal search terms and they degrade relevance
 
 Return ONLY the queries, one per line, numbered. Example format:
 1. first refined query here
@@ -130,10 +131,10 @@ Your task is to transform user questions into optimal ArXiv search queries.
 Guidelines:
 - Consider the conversation history to understand context
 - If the user asks a follow-up question (e.g., "tell me more about X", "what about Y?"), use the previous context to refine the query
-- Identify key scientific concepts
-- Use technical terminology
-- Keep it concise (5-10 words max)
-- Focus on the core topic
+- Identify key scientific concepts and use precise technical terminology
+- Keep it concise (5-10 words max) and focus on the core topic
+- Use domain-specific descriptors (e.g. "sparse attention", "linear complexity", "state space models") rather than generic terms like "survey" or "overview" which match unrelated papers
+- Do NOT include years, dates, or version numbers — ArXiv treats these as literal search terms and they degrade relevance
 
 Return ONLY the refined query, nothing else."""
 
@@ -164,7 +165,6 @@ Return ONLY the refined query, nothing else."""
 
 def arxiv_researcher_node(state: InternalState) -> OutputState:
     """ArXiv researcher node: searches ArXiv for relevant papers and scores their relevance."""
-
     max_papers = state.get("max_papers", 5)
 
     query = state["refined_query"]
@@ -172,19 +172,23 @@ def arxiv_researcher_node(state: InternalState) -> OutputState:
     iteration = state.get("iteration", 0)
 
     logging.info(f"Searching ArXiv: '{query}' (iteration {iteration})")
-    papers = search_arxiv.invoke({"query": query, "max_results": max_papers})
-    logging.info(f"Found {len(papers)} papers")
+    candidates = search_arxiv.invoke({"query": query, "max_results": CANDIDATE_FETCH})
+    logging.info(f"Fetched {len(candidates)} candidates, reranking...")
+
+    # Dense + cross-encoder scoring
+    candidates = score_papers(original_query, candidates)
+
+    # Drop-off filter: cut at relative score gap, hard ceiling max_k=10
+    papers = apply_dropoff(candidates)
+    logging.info(f"Drop-off filter kept {len(papers)} / {len(candidates)} papers")
 
     llm_temperature = state.get("llm_temperature", 0)
-
-    # Score each paper's relevance using LLM
     llm = get_llm(temperature=llm_temperature)
 
-    logging.info(f"Scoring paper relevance...")
+    logging.info(f"LLM scoring {len(papers)} survivors...")
 
     scored_papers = []
     for paper in papers:
-        # Create prompt for scoring
         score_messages = [
             SystemMessage(content="""You are a research relevance evaluator.
             Score how relevant a paper is to the user's query on a scale from 1 to 100.
@@ -205,11 +209,11 @@ Relevance Score (1-100):""", name="User")
         ]
 
         response = llm.invoke(score_messages)
-        relevance_score = int(response.content.strip())
-        paper['relevance_score'] = max(1, min(100, relevance_score))
+        paper['relevance_score'] = max(1, min(100, int(response.content.strip())))
+        paper['relevance_score'] = final_relevance_score(paper)
         paper['source'] = 'arxiv'
         scored_papers.append(paper)
-        logging.info(f"  📄 {paper['title'][:60]}... - Score: {relevance_score}")
+        logging.info(f"  📄 {paper['title'][:60]}... - Score: {paper['relevance_score']}")
 
     # Return OutputState fields
     return {
@@ -349,7 +353,6 @@ Relevance Score (1-100):""", name="User")
 
 def summarizer_node(state: InternalState) -> OutputState:
     """Summarizer node: analyzes papers and generates a concise summary."""
-
     max_iterations = state.get("max_iterations", 2)
     llm_temperature = state.get("llm_temperature", 0)
 
@@ -384,20 +387,20 @@ def summarizer_node(state: InternalState) -> OutputState:
     ])
     
     messages = [
-        SystemMessage(content="""You are an expert scientific assistant.
+        SystemMessage(content="""You are an expert scientific assistant. Respond in English only.
         Create a concise summary with:
         - 3-5 bullet points highlighting main insights of 3-5 sentences
         - Each bullet point must reference source papers [Paper X]
         - Clear and accessible style
         - End with a "References" section listing all papers
-        
+
         Format:
-        ## Résumé
+        ## Summary
         • Point 1 [Paper 1, Paper 2]
         • Point 2 [Paper 3]
         ...
-        
-        ## Références
+
+        ## References
         [Paper 1] Title - Authors (Year) - URL
         ..."""),
         HumanMessage(content=f"""Original question: {query}

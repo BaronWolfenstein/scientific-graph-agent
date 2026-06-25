@@ -107,7 +107,7 @@ def create_graph(
     workflow.add_conditional_edges(
         "summarizer",
         should_continue,
-        {researcher_nodes[0]: researcher_nodes[0], "end": END}
+        {"researcher": researcher_nodes[0], "end": END}
     )
 
     if with_checkpointer:
@@ -223,7 +223,7 @@ async def create_streaming_graph(
     workflow.add_conditional_edges(
         "summarizer",
         should_continue,
-        {researcher_nodes[0]: researcher_nodes[0], "end": END}
+        {"researcher": researcher_nodes[0], "end": END}
     )
 
     if with_checkpointer:

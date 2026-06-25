@@ -45,8 +45,8 @@ def main():
         # Extract interrupt payload from pending tasks
         interrupt_payload = {}
         for task in snapshot.tasks:
-            for intr in task.interrupts:
-                interrupt_payload = intr.value
+            if task.interrupts:
+                interrupt_payload = task.interrupts[0].value
                 break
 
         display = interrupt_payload.get("display", "")

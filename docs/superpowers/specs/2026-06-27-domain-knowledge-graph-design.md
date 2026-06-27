@@ -61,35 +61,56 @@ src/agent_graph/kg/
 ├── protocol.py      # KnowledgeGraph Protocol — the ONLY thing nodes import
 ├── ontology.py      # frozen enums: EntityType, RelationType, FUNCTIONAL, MUTEX; URI minting
 ├── confidence.py    # Beta-Bernoulli update + readout (pure functions)
-├── rdfstar_store.py # rdflib-star implementation of the Protocol
+├── rdfstar_store.py # pyoxigraph (RDF 1.2 reifier) implementation of the Protocol
 └── extract.py       # ScientificTriplet / TripletExtraction Pydantic + extraction prompt
 ```
 
-Nodes import only `protocol.py` and `extract.py`. Swapping the backend (rdflib →
-oxigraph) touches only `rdfstar_store.py` plus a factory.
+Nodes import only `protocol.py` and `extract.py`. Swapping the backend touches only
+`rdfstar_store.py` plus a factory.
 
 ## 4. Storage Decision: RDF* behind an interface
 
-**Decision:** RDF* (RDF-star) semantics, abstracted behind a `KnowledgeGraph`
-Protocol. v1 implementation is in-memory **rdflib** with quoted-triple support;
-**oxigraph** (durable, Rust-backed, real SPARQL-star) is a reserved swap-in.
+**Decision:** RDF* (RDF 1.2 / RDF-star) semantics, abstracted behind a
+`KnowledgeGraph` Protocol. v1 implementation is **pyoxigraph** (Rust-backed, real
+RDF-star + SPARQL-star, durable on-disk store).
 
-**Why RDF\*** over a property-graph (NetworkX) or plain RDF:
-- Per-claim metadata (confidence, evidence, provenance, year range) is a
-  *statement about a statement* — which RDF* models natively
-  (`<<s p o>> :confidence 0.82`) and plain RDF can only express via verbose
-  blank-node reification (the "messy versioned ontology" failure mode we are
-  avoiding).
-- The clinical endgame (Section 1) makes standards interop (LOINC/SNOMED/FHIR as
-  RDF/OWL, SHACL validation, SPARQL-star) a real future asset rather than overhead.
+**Empirically verified during planning (2026-06-27), correcting an earlier
+assumption:**
+- **rdflib 7.6.0 has NO RDF-star** — no quoted-triple term type, no Turtle-star
+  parser. The experimental 6.x support is gone. An "rdflib-star" v1 is not
+  implementable.
+- **The old RDF-star syntax (quoted-triple-as-subject, `<<s p o>> :conf 0.8`) is
+  obsolete.** W3C **RDF 1.2** replaced it with **reification**: a reifier node
+  links to a *triple term* via `rdf:reifies`, and annotations hang on the reifier.
+- **pyoxigraph 0.5.9 implements the current model natively** (`RdfFormat.supports_rdf_star`
+  is true), with SPARQL-star (`<<( s p o )>>` query syntax verified) and a durable
+  Store. This is the real RDF* we want, via the standards-current API.
 
-**Why behind an interface:** rdf-star tooling in Python is the immature part. The
-Protocol lets the rdflib-vs-oxigraph choice be revisited without touching node
-wiring.
+**Why RDF\*** over a property-graph (NetworkX) or plain manual reification:
+- Per-claim metadata (confidence, evidence, provenance, year range, and the
+  reserved bitemporal valid/transaction times) is a *statement about a statement* —
+  modeled natively by the reifier node.
+- The clinical endgame (Section 1) makes standards interop a real future asset:
+  `loinc.ttl` and SNOMED-OWL can load into the *same* oxigraph store as the claim
+  graph, so SPARQL can traverse a LOINC/SNOMED hierarchy AND attach
+  `term --mapped_to--> code` edges with RDF-star provenance in one engine — which a
+  property graph cannot do without re-implementing terminology import. (Note: RDF*
+  is the unifying *substrate*; the reconciliation matching logic + any FHIR
+  terminology server remain separate work — see Section 9.)
 
-**Trade-off accepted:** rdflib's SPARQL-star is slow/immature, so graph *traversal*
-(Section 7) is implemented in Python over the triples; SPARQL-star is reserved for
-later analytical queries.
+**Why behind an interface:** RDF-star tooling churn (the rdflib/RDF-1.2 surprise
+above) is exactly the risk the Protocol absorbs. Swapping stores later touches only
+`rdfstar_store.py` + a factory; node wiring is unaffected.
+
+**Representation (RDF 1.2 reifier model):** each claim is a base triple
+`(s, p, o)` plus a reifier (blank node) with `(reifier, rdf:reifies, <<s p o>>)`
+and annotation triples `(reifier, kg:confidence, …)`, `(reifier, kg:asserted_by,
+pmid)`, etc. The reserved bitemporal axis (Section 9) is additive: it is just more
+annotation triples on the same reifier.
+
+**Trade-off accepted:** pyoxigraph is a compiled dependency. Graph *traversal*
+(Section 7) uses oxigraph's native quad iteration / SPARQL; SPARQL-star analytical
+queries are available now but only a thin slice is used in v1.
 
 ## 5. Ontology (frozen for v1)
 
@@ -133,11 +154,14 @@ Pydantic schema (Section 6), so the LLM physically cannot mint off-ontology URIs
   reserved (Section 9) and is the natural insertion point for LOINC/SNOMED mapping.
 - Papers: reuse real identifiers — `pmid:12345` / `arxiv:2401.xxxxx` (free,
   globally meaningful provenance).
-- Claims: quoted triples `<< kg:drug/imatinib kg:treats kg:disease/cml >>`,
-  annotated with `confidence, confidence_lb, alpha, beta, support, refute,
-  first_year, last_year, contested`, plus one `asserted_by` link per supporting
-  paper. Per-evidence detail (relevance, polarity, snippet) hangs off the
-  `asserted_by` link.
+- Claims: base triple `(kg:drug/imatinib, kg:treats, kg:disease/cml)` plus a reifier
+  blank node `r` with `(r, rdf:reifies, <<s p o>>)` (RDF 1.2). Aggregate annotations
+  hang on `r`: `kg:confidence, kg:confidence_lb, kg:alpha, kg:beta, kg:support,
+  kg:refute, kg:first_year, kg:last_year, kg:contested`. Each supporting paper adds
+  one `(r, kg:asserted_by, <paper_uri>)`. Per-evidence detail (relevance, polarity,
+  snippet) is modeled as its own reifier on the `asserted_by` statement, or — for v1
+  simplicity — stored compactly as a JSON literal on `kg:evidence` (decided in the
+  plan; both are pure additions of annotation triples).
 
 **Extraction schema** (`extract.py`, enforced at the structured-output boundary):
 
@@ -174,12 +198,14 @@ class KnowledgeGraph(Protocol):
 
 - `add_relation` upserts the claim, appends evidence, recomputes confidence
   (Section 8), and runs `_flag_conflicts` (MUTEX + retained-but-empty FUNCTIONAL).
-- `query` does a **weighted BFS** in Python over the triples: from seed entities,
-  expand up to `max_depth` hops in both directions, filtering by `min_confidence`
+- `query` does a **weighted BFS** over the oxigraph store: from seed entities,
+  expand up to `max_depth` hops in both directions via `store.quads_for_pattern`,
+  joining each base triple to its reifier annotations, filtering by `min_confidence`
   and `as_of_year` (the single publication-date axis), ranking results by
   `confidence_lb` then hint-match then recency. Returns plain dicts.
 - `to_context` serializes ranked edges into a prompt block, marking `⚠CONTESTED`.
-- `to_dict`/`from_dict` serialize the graph into the LangGraph sqlite checkpoint.
+- `to_dict`/`from_dict` serialize the store (N-Quads via `store.dump`/`Store.load`)
+  so the graph rides in the LangGraph sqlite checkpoint as a string.
 
 ## 8. Confidence: Beta-Bernoulli
 
@@ -201,17 +227,23 @@ down. Pure functions in `confidence.py`.
 
 ## 9. Reserved Future Work (explicit seams)
 
-| Reserved | Seam that keeps it additive |
-|---|---|
-| Second time axis / full bitemporality | Evidence dict + `_recompute`; query already has `as_of_year` |
-| Contradiction resolution / human-review routing | `_flag_conflicts` returns a note today; route it later |
-| LLM reconciliation pass | A new node downstream of `graph_builder`; nothing depends on its absence |
-| Entity/synonym resolution + LOINC/SNOMED mapping | URI minting in `ontology.py`; the single normalization seam |
-| `cites` edges | Reserved predicate; add CrossRef/S2 fetch + edges |
-| `affiliated_with` + `organization` entity type | Reserved predicate; add 9th entity type + affiliation source |
-| Durable store (oxigraph) | Protocol + factory; swap `rdfstar_store.py` |
-| SPARQL-star analytical queries | rdflib-star already stores quoted triples |
-| Graph-centrality reranking | `query` returns structured edges; feed into `reranker.py` |
+Two distinct layers are reserved — keep them straight (they do not overlap):
+*knowledge-data-model* items (bitemporality, reconciliation) live on the graph;
+*execution-audit* items (FHIR AuditEvent) live at the LangGraph checkpoint layer and
+are backend-independent. Bitemporality is the one item that depends on the RDF 1.2
+reifier we build in v1; AuditEvent does not.
+
+| Reserved | Layer | Seam that keeps it additive |
+|---|---|---|
+| Second time axis / full bitemporality (valid-time + transaction-time) | data-model | `valid_from/valid_to/tx_from/tx_to` are more annotation triples on the existing reifier; `query` already has `as_of_year` |
+| Contradiction resolution / human-review routing | data-model | `_flag_conflicts` returns a note today; route it later |
+| LLM reconciliation pass | data-model | A new node downstream of `graph_builder`; nothing depends on its absence |
+| Entity/synonym resolution + LOINC/SNOMED mapping | data-model | URI minting in `ontology.py` is the single normalization seam; load `loinc.ttl`/SNOMED-OWL into the same store. (Matching logic + optional FHIR terminology server are separate work, not free from RDF*.) |
+| `cites` edges | data-model | Reserved predicate; add CrossRef/S2 fetch + edges |
+| `affiliated_with` + `organization` entity type | data-model | Reserved predicate; add 9th entity type + affiliation source |
+| FHIR AuditEvent (who/what/when did an action) | execution-audit | Overlaps LangGraph checkpointing, not bitemporal edges; emit from a checkpoint listener — independent of the graph backend |
+| SPARQL-star analytical queries | data-model | oxigraph already stores RDF-star; widen query use |
+| Graph-centrality reranking | data-model | `query` returns structured edges; feed into `reranker.py` |
 
 ## 10. Node Wiring
 
@@ -247,5 +279,8 @@ down. Pure functions in `confidence.py`.
 
 ## 12. Dependencies
 
-Add `rdflib` (pure-Python, supports RDF-star/quoted triples) to `pyproject.toml`.
-No compiled or service dependencies in v1.
+Add `pyoxigraph>=0.5` to `pyproject.toml` — Rust-backed RDF store with native
+RDF-star (RDF 1.2) and SPARQL-star, verified during planning (oxigraph 0.5.9,
+`RdfFormat.supports_rdf_star`). It is a compiled (wheel) dependency; no external
+service. Reserved alternative (`rdflib` + manual reification, pure-Python) is
+recorded but not chosen — rdflib lacks RDF-star.

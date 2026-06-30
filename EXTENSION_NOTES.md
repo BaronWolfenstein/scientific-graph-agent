@@ -58,6 +58,29 @@ by Lina Faik. I adapted and instrumented the existing framework — I did not au
 - Created `run_demo.py`: CLI entry point, handles interrupt/resume loop
 - Example query: CAR-T cell therapy in relapsed/refractory DLBCL
 
+### 7. Pre-HITL validation gate (2026-06-30)
+- Added `validate_output_node` + `route_after_validation` to `nodes.py`, spliced
+  between `dual_audience` and `hitl_approval` in `create_demo_graph`:
+  `... → dual_audience → validate_output → {regenerate → dual_audience | approve → hitl_approval}`
+- Two-layer machine check BEFORE the human gate, so the reviewer adjudicates
+  *meaning*, not *form*:
+  1. **Structural** — JSON Schema (`ClinicianSummary`/`TechnicalSummary.model_json_schema()`)
+     via the `jsonschema` lib (added to `pyproject.toml`).
+  2. **Grounding** — every cited PMID must be in the retrieved set (a cross-document
+     constraint JSON Schema cannot express); catches hallucinated citations.
+- Invalid drafts loop back to regenerate, bounded by `max_iterations` (gate bumps
+  `iteration`); added `validation_errors` field to `InternalState`.
+- Tested in `tests/test_validate_output.py` (5 tests: valid, structural, grounding,
+  loop-break, wiring).
+- **Why JSON Schema and not JSONB/JSON-LD:** JSON Schema *validates*; the other two
+  solve adjacent, later problems and are reserved (see KG design spec §9):
+  - **JSONB** — persist *approved* summaries in Postgres for audit/query
+    ("every summary citing pmid X"); the after-approval storage layer, pairs with
+    the reserved FHIR AuditEvent item.
+  - **JSON-LD** — give the summary an `@context` mapping entities to RDF +
+    LOINC/SNOMED/RxNorm URIs so an approved summary becomes a node in the reserved
+    RDF-star knowledge graph; the semantic-interop bridge.
+
 ## What was NOT changed
 - ArXiv and Wikipedia tools and nodes (intact, still usable)
 - `create_graph`, `create_streaming_graph`, `create_graph_with_approval`,

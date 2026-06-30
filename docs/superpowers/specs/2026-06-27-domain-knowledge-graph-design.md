@@ -244,6 +244,8 @@ reifier we build in v1; AuditEvent does not.
 | `cites` edges | data-model | Reserved predicate; add CrossRef/S2 fetch + edges |
 | `affiliated_with` + `organization` entity type | data-model | Reserved predicate; add 9th entity type + affiliation source |
 | FHIR AuditEvent (who/what/when did an action) | execution-audit | Overlaps LangGraph checkpointing, not bitemporal edges; emit from a checkpoint listener — independent of the graph backend |
+| JSONB persistence of approved outputs | execution-audit | Store HITL-approved summaries (and their `validation_errors`) as JSONB in Postgres for audit/query; the after-approval storage layer that pairs with FHIR AuditEvent. The *pre*-HITL JSON Schema gate is already implemented (see EXTENSION_NOTES §7) — distinct concern: validation vs. storage |
+| JSON-LD output mapping | data-model | Give the agent's approved summary an `@context` mapping its entities to RDF + LOINC/SNOMED/RxNorm URIs, so an approved summary becomes a node in this KG; the semantic-interop bridge between agent JSON and the claim graph. Depends on the reconciliation seam (§9.1) for the target URIs |
 | SPARQL-star analytical queries | data-model | oxigraph already stores RDF-star; widen query use |
 | Graph-centrality reranking | data-model | `query` returns structured edges; feed into `reranker.py` |
 

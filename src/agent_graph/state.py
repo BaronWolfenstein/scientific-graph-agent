@@ -133,6 +133,7 @@ class InternalState(InputState, OutputState):
     refined_queries: NotRequired[List[str]]  # Multiple refined queries (map-reduce mode)
     iteration: Annotated[int, take_max]  # Loop counter for retry logic (uses max to handle concurrent updates)
     approved: NotRequired[bool]  # Approval status from approver node
+    validation_errors: NotRequired[list]  # Pre-HITL schema/grounding validation errors
     
 class PrivateState(TypedDict):
     """Private state for internal node processing."""

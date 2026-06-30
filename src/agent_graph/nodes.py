@@ -3,6 +3,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.types import interrupt
 import asyncio
 import json as _json
+import jsonschema
 from pydantic import ValidationError
 
 from agent_graph.llm import get_llm
@@ -832,7 +833,7 @@ def dual_audience_node(state: InternalState) -> dict:
     papers = state.get("papers", [])
     query = state["query"]
 
-    llm = get_llm(temperature=state.get("llm_temperature", 0))
+    llm = get_llm(temperature=state.get("llm_temperature", 0), max_tokens=8192)
 
     # Build grounded paper context — list PMIDs explicitly so the model knows which to cite
     papers_context = "\n\n".join([
@@ -924,6 +925,75 @@ def dual_audience_node(state: InternalState) -> dict:
             )
         ]
     }
+
+
+# ============================================================================
+# PRE-HITL VALIDATION GATE
+# ============================================================================
+
+# Portable JSON Schema contracts derived from the Pydantic models. These can be
+# exported/versioned independently of the producing code.
+_CLINICIAN_SCHEMA = ClinicianSummary.model_json_schema()
+_TECHNICAL_SCHEMA = TechnicalSummary.model_json_schema()
+
+
+def validate_output_node(state: InternalState) -> dict:
+    """Machine-validate the two draft summaries BEFORE a human ever sees them.
+
+    Two layers:
+      1. Structural — JSON Schema (required fields, types) per document.
+      2. Grounding — every cited PMID must be one we actually retrieved
+         (a cross-document constraint JSON Schema cannot express), so a
+         hallucinated citation never reaches a clinical reviewer.
+
+    On error it bumps `iteration` so a regenerate loop is bounded by
+    `max_iterations`. The human then only ever adjudicates well-formed,
+    grounded output — reviewing meaning, not form.
+    """
+    errors = []
+    pairs = [
+        ("clinician_summary", state.get("clinician_summary"), _CLINICIAN_SCHEMA),
+        ("technical_summary", state.get("technical_summary"), _TECHNICAL_SCHEMA),
+    ]
+
+    # (1) structural — JSON Schema, intra-document
+    for name, obj, schema in pairs:
+        if obj is None:
+            errors.append(f"{name}: missing")
+            continue
+        try:
+            jsonschema.validate(obj, schema)
+        except jsonschema.ValidationError as exc:
+            errors.append(f"{name}: {exc.message}")
+
+    # (2) grounding — citations must be a subset of retrieved PMIDs
+    allowed = {p.get("pmid") for p in state.get("papers", []) if p.get("pmid")}
+    if allowed:
+        for name, obj, _ in pairs:
+            if not obj:
+                continue
+            for ev in obj.get("evidence", []):
+                pmid = ev.get("pmid")
+                if pmid and pmid not in allowed:
+                    errors.append(f"{name}: ungrounded citation pmid:{pmid}")
+
+    if errors:
+        logging.warning(f"⚠️  Pre-HITL validation found {len(errors)} issue(s): {errors}")
+        return {"validation_errors": errors, "iteration": state.get("iteration", 0) + 1}
+    return {"validation_errors": []}
+
+
+def route_after_validation(state: InternalState) -> str:
+    """Route to regenerate on validation errors, else to the human gate.
+
+    Bounded by max_iterations so a persistently-malformed model cannot loop
+    forever; after exhausting retries we let the human see it (they remain the
+    final gate, and validation_errors are in state for display).
+    """
+    errors = state.get("validation_errors") or []
+    if errors and state.get("iteration", 0) < state.get("max_iterations", 2):
+        return "regenerate"
+    return "approve"
 
 
 # ============================================================================

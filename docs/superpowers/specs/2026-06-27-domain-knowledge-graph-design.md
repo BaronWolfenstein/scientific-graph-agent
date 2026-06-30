@@ -290,6 +290,27 @@ bound confidence at the *grounded* evidence mass (Leak A), not to change that ce
   deliberate simplification. The correlation discount (Leak B) explicitly does **not**
   belong in this spec.
 
+**Bitemporality is a third, independent axis — not part of either clinical plan.**
+Reconciliation fixes entity identity; `VerifiedClaim` fixes claim faithfulness;
+bitemporality versions facts over time (valid-time + transaction-time). Its trigger is
+distinct: it activates only when EHR-style **temporal clinical records** enter the graph
+(patient-level facts that change or arrive late), NOT when terminology mapping or
+faithfulness is needed. For the literature agent the single publication-date axis
+(`as_of_year`) suffices, so bitemporality may never activate in this codebase at all.
+It neither blocks nor is blocked by the other two — ordering among the three is
+independent. No plan until EHR-style temporal data is in scope; the reifier-annotation
+seam is already documented above.
+
+**None of the three plans is authored yet — deliberately.** A bite-sized TDD plan
+requires exact file paths, signatures, and seams against *existing* code; writing these
+against the unbuilt v1 KG would force placeholders (a writing-plans failure) and would
+prematurely freeze design choices that still need their own brainstorming (resolver
+mechanism + terminology source format for reconciliation; verification check method +
+source-matching for `VerifiedClaim`). The correct record at this stage is this spec
+sketch, not three speculative plans. When the clinical workstream is green-lit, the
+sequence is: build v1 KG → brainstorm + spec → plan → implement reconciliation → repeat
+for `VerifiedClaim`; bitemporality only if temporal records arrive.
+
 ## 10. Node Wiring
 
 - **`state.py`:** add `knowledge_graph: Annotated[NotRequired[KnowledgeGraph],

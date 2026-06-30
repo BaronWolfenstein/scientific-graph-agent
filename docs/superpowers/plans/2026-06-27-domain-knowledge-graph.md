@@ -339,6 +339,7 @@ git commit -m "feat(kg): Beta-Bernoulli confidence model"
 - Produces:
   - `ScientificTriplet` (Pydantic): fields `subject: str`, `subject_type: EntityType`, `relation: RelationType`, `object: str`, `object_type: EntityType`, `polarity: Literal["supports","refutes"] = "supports"`
   - `TripletExtraction` (Pydantic): `triplets: list[ScientificTriplet] = []`
+  - `Evidence` (Pydantic): the typed boundary object for one paper's assertion of a claim — `paper_uri: str`, `pmid: Optional[str]` (constrained `^\d+$`), `paper_id: Optional[str]`, `pub_year: Optional[int]` (1800–2100), `relevance: int` (0–100), `polarity: Literal["supports","refutes"] = "supports"`, `snippet: str = ""`. This is the **parse-don't-validate** boundary type: `add_relation` (Task 5) coerces any incoming `dict` into `Evidence` once, so nothing downstream re-checks a raw blob.
   - `EXTRACTION_PROMPT: str`
 
 - [ ] **Step 1: Write the failing test**
@@ -374,6 +375,26 @@ def test_off_ontology_entity_type_rejected():
 def test_empty_extraction_default():
     from agent_graph.kg.extract import TripletExtraction
     assert TripletExtraction().triplets == []
+
+
+def test_evidence_valid_and_constrained_pmid():
+    from agent_graph.kg.extract import Evidence
+    e = Evidence(paper_uri="pmid:12345", pmid="12345", relevance=90)
+    assert e.pmid == "12345" and e.polarity == "supports"
+
+
+def test_evidence_rejects_nonnumeric_pmid_and_bad_relevance():
+    from agent_graph.kg.extract import Evidence
+    with pytest.raises(ValidationError):
+        Evidence(paper_uri="x", pmid="PMC-not-a-pmid", relevance=50)
+    with pytest.raises(ValidationError):
+        Evidence(paper_uri="x", relevance=500)  # out of 0-100
+
+
+def test_evidence_coerces_from_dict():
+    from agent_graph.kg.extract import Evidence
+    e = Evidence.model_validate({"paper_uri": "arxiv:2401.1", "relevance": 70})
+    assert e.pmid is None and e.relevance == 70
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -390,7 +411,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'agent_graph.kg.extract
 The Literals are imported from ontology.py so the schema and the gate cannot
 drift apart. Pydantic enforces them at the structured-output boundary.
 """
-from typing import Literal
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from agent_graph.kg.ontology import EntityType, RelationType
@@ -407,6 +428,22 @@ class ScientificTriplet(BaseModel):
 
 class TripletExtraction(BaseModel):
     triplets: list[ScientificTriplet] = Field(default_factory=list)
+
+
+class Evidence(BaseModel):
+    """One paper's assertion of a claim — the parse-don't-validate boundary type.
+
+    add_relation() coerces incoming dicts into this once, so the constrained
+    pmid / bounded relevance / known polarity are guaranteed for everything
+    downstream (confidence, serialization). A raw dict never flows deeper.
+    """
+    paper_uri: str
+    pmid: Optional[str] = Field(default=None, pattern=r"^\d+$")
+    paper_id: Optional[str] = None
+    pub_year: Optional[int] = Field(default=None, ge=1800, le=2100)
+    relevance: int = Field(ge=0, le=100)
+    polarity: Literal["supports", "refutes"] = "supports"
+    snippet: str = ""
 
 
 EXTRACTION_PROMPT = """You extract structured scientific claims from a paper abstract.
@@ -427,13 +464,13 @@ Return the triplets for the abstract below."""
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/pytest tests/test_kg_extract.py -v`
-Expected: PASS (4 passed)
+Expected: PASS (7 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/agent_graph/kg/extract.py tests/test_kg_extract.py
-git commit -m "feat(kg): ontology-constrained extraction schema + prompt"
+git commit -m "feat(kg): ontology-constrained extraction schema + typed Evidence boundary"
 ```
 
 ---
@@ -446,11 +483,11 @@ git commit -m "feat(kg): ontology-constrained extraction schema + prompt"
 - Test: `tests/test_kg_store_write.py`
 
 **Interfaces:**
-- Consumes: `ontology` (Task 2), `confidence` (Task 3).
+- Consumes: `ontology` (Task 2), `confidence` (Task 3), `extract.Evidence` (Task 4).
 - Produces:
-  - `protocol.KnowledgeGraph` (Protocol) with: `add_relation(subject, subject_type, relation, obj, object_type, evidence: dict) -> str | None`, `query(...) -> list[dict]`, `to_context(edges, limit=25) -> str`, `to_dict() -> dict`, classmethod `from_dict(data: dict)`.
+  - `protocol.KnowledgeGraph` (Protocol) with: `add_relation(subject, subject_type, relation, obj, object_type, evidence: dict | Evidence) -> str | None`, `query(...) -> list[dict]`, `to_context(edges, limit=25) -> str`, `to_dict() -> dict`, classmethod `from_dict(data: dict)`.
   - `rdfstar_store.OxigraphKG` implementing it. This task delivers `__init__`, `add_relation`, and internal helpers `_node`, `_reifier_for`, `_evidence`, `_dedupe`, `_write_annotations`, `_flag_conflicts`. (`query`/`to_context`/`to_dict`/`from_dict`/`merge_from` arrive in Tasks 6–7.)
-  - Evidence dict shape: `{"paper_uri": str, "pmid": str|None, "paper_id": str|None, "pub_year": int|None, "relevance": int, "polarity": "supports"|"refutes", "snippet": str}`. Dedup key is `paper_uri` (or `pmid`/`paper_id` fallback) per claim — re-adding the same paper to the same claim is idempotent.
+  - **Parse-don't-validate boundary:** `add_relation` coerces its `evidence` argument through `Evidence.model_validate(...).model_dump()` as the first line, so a malformed blob (bad pmid, out-of-range relevance) raises `ValidationError` *here*, and the internal dict-based machinery (`_dedupe`, `_write_annotations`, `beta_params`) only ever sees validated fields. Validated dict shape: `{"paper_uri": str, "pmid": str|None, "paper_id": str|None, "pub_year": int|None, "relevance": int, "polarity": "supports"|"refutes", "snippet": str}`. Dedup key is `paper_uri` (or `pmid`/`paper_id` fallback) per claim — re-adding the same paper to the same claim is idempotent.
   - Annotation predicate locals on the reifier: `confidence, confidence_lb, alpha, beta, support, refute, first_year, last_year, contested, evidence, asserted_by` (all under `KG` namespace; `asserted_by` objects are paper URIs).
 
 - [ ] **Step 1: Write the failing test**
@@ -500,6 +537,17 @@ def test_mutex_flags_both_claims_contested():
     m_inc = kg._claim_meta("drug", "StatinX", "increases_risk_of", "disease", "MI")
     m_dec = kg._claim_meta("drug", "StatinX", "decreases_risk_of", "disease", "MI")
     assert m_inc["contested"] is True and m_dec["contested"] is True
+
+
+def test_add_relation_rejects_malformed_evidence_at_boundary():
+    from agent_graph.kg.rdfstar_store import OxigraphKG
+    from pydantic import ValidationError
+    kg = OxigraphKG()
+    with pytest.raises(ValidationError):
+        kg.add_relation("Imatinib", "drug", "treats", "CML", "disease",
+                        {"paper_uri": "x", "pmid": "not-numeric", "relevance": 50})
+    # nothing was written — the blob never reached the store
+    assert kg._claim_meta("drug", "Imatinib", "treats", "disease", "CML") is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -518,9 +566,13 @@ from typing import Protocol, runtime_checkable
 @runtime_checkable
 class KnowledgeGraph(Protocol):
     def add_relation(self, subject: str, subject_type: str, relation: str,
-                     obj: str, object_type: str, evidence: dict):
+                     obj: str, object_type: str, evidence):
         """Upsert a claim, fold in one evidence item, recompute confidence,
-        flag MUTEX conflicts. Returns a conflict note string or None."""
+        flag MUTEX conflicts. Returns a conflict note string or None.
+
+        `evidence` is a dict or extract.Evidence; the implementation parses it
+        into a validated Evidence at the boundary (raises ValidationError on a
+        malformed blob)."""
         ...
 
     def query(self, entities, relation_hints=None, max_depth: int = 2,
@@ -549,6 +601,7 @@ import pyoxigraph as ox
 
 from agent_graph.kg import ontology as ont
 from agent_graph.kg import confidence as conf
+from agent_graph.kg.extract import Evidence
 
 _REIFIES = ox.NamedNode(ont.RDF_REIFIES)
 _XSD_DOUBLE = ox.NamedNode("http://www.w3.org/2001/XMLSchema#double")
@@ -670,6 +723,10 @@ class OxigraphKG:
 
     # ---- public write ----
     def add_relation(self, subject, subject_type, relation, obj, object_type, evidence):
+        # parse-don't-validate boundary: coerce the blob into a typed Evidence ONCE.
+        # Malformed input (bad pmid / out-of-range relevance) raises here, before
+        # anything touches the store; downstream only sees validated fields.
+        evidence = Evidence.model_validate(evidence).model_dump()
         s = self._node(subject_type, subject)
         o = self._node(object_type, obj)
         p = ox.NamedNode(ont.relation_uri(relation))
@@ -712,7 +769,7 @@ class OxigraphKG:
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `.venv/bin/pytest tests/test_kg_store_write.py -v`
-Expected: PASS (3 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 6: Commit**
 
@@ -1395,6 +1452,8 @@ git commit -m "feat(kg): wire graph_builder into demo graph + inject context int
 
 **Placeholder scan:** No TBD/TODO; every code step shows complete code.
 
-**Type consistency:** Evidence dict shape is identical across Tasks 5/7/8 (`paper_uri, pmid, paper_id, pub_year, relevance, polarity, snippet`). `_claim_meta`/`_reifier_meta` dict keys (`confidence, confidence_lb, support, contested, first_year, last_year`) are produced in Task 5 and consumed in Tasks 6–9. `query()` edge-dict keys (`subject, relation, object, confidence, confidence_lb, support, contested, years, hint_match`) defined in Task 6, consumed by `to_context` (Task 6) and the summarizer (Task 9). `merge_graphs`/`get_knowledge_graph` defined in Task 7, imported in Tasks 8–9.
+**Type consistency:** The evidence boundary type `Evidence` (Task 4) has fields `paper_uri, pmid, paper_id, pub_year, relevance, polarity, snippet`; `add_relation` (Task 5) parses any dict into it via `model_validate(...).model_dump()`, so the internal dict shape consumed by `_dedupe`/`_write_annotations`/`beta_params` is exactly `Evidence.model_dump()`. Call sites in Tasks 5/7/8/9 build dicts with those keys (relevance always provided). `_claim_meta`/`_reifier_meta` dict keys (`confidence, confidence_lb, support, contested, first_year, last_year`) are produced in Task 5 and consumed in Tasks 6–9. `query()` edge-dict keys (`subject, relation, object, confidence, confidence_lb, support, contested, years, hint_match`) defined in Task 6, consumed by `to_context` (Task 6) and the summarizer (Task 9). `merge_graphs`/`get_knowledge_graph` defined in Task 7, imported in Tasks 8–9.
+
+**Parse-don't-validate coverage:** untrusted inputs are parsed into trusted types at exactly two boundaries — LLM output → `TripletExtraction` (existing pattern, Task 8) and evidence blob → `Evidence` (Task 5). No raw dict flows past `add_relation`. The `VerifiedClaim`-as-distinct-type idea is intentionally NOT here — it belongs to the reserved faithfulness/reconciliation layer (spec §9), not v1.
 
 **Scope:** One package, one pipeline integration — single coherent plan.

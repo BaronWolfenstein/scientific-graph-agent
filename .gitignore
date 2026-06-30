@@ -9,3 +9,4 @@ dist/
 .langgraph_api/
 build/
 *.db
+.DS_Store

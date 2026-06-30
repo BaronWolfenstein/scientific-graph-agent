@@ -238,12 +238,57 @@ reifier we build in v1; AuditEvent does not.
 | Second time axis / full bitemporality (valid-time + transaction-time) | data-model | `valid_from/valid_to/tx_from/tx_to` are more annotation triples on the existing reifier; `query` already has `as_of_year` |
 | Contradiction resolution / human-review routing | data-model | `_flag_conflicts` returns a note today; route it later |
 | LLM reconciliation pass | data-model | A new node downstream of `graph_builder`; nothing depends on its absence |
-| Entity/synonym resolution + LOINC/SNOMED mapping | data-model | URI minting in `ontology.py` is the single normalization seam; load `loinc.ttl`/SNOMED-OWL into the same store. (Matching logic + optional FHIR terminology server are separate work, not free from RDF*.) |
+| Entity/synonym resolution + LOINC/SNOMED/RxNorm mapping | data-model | URI minting in `ontology.py` is the single normalization seam; load `loinc.ttl`/SNOMED-OWL/RxNorm into the same store. (Matching logic + optional FHIR terminology server are separate work, not free from RDF*.) |
+| `VerifiedClaim` (claim faithfulness vs. source) | data-model | `verified: float` field on `Evidence`, multiplied into `evidence_weight` in `confidence.py`; see §9.1 |
+| Correlation discount (independence leak) | data-model | Distinct from `VerifiedClaim`; needs `cites`/co-authorship data + a novelty/hierarchical model; see §9.1 |
 | `cites` edges | data-model | Reserved predicate; add CrossRef/S2 fetch + edges |
 | `affiliated_with` + `organization` entity type | data-model | Reserved predicate; add 9th entity type + affiliation source |
 | FHIR AuditEvent (who/what/when did an action) | execution-audit | Overlaps LangGraph checkpointing, not bitemporal edges; emit from a checkpoint listener — independent of the graph backend |
 | SPARQL-star analytical queries | data-model | oxigraph already stores RDF-star; widen query use |
 | Graph-centrality reranking | data-model | `query` returns structured edges; feed into `reranker.py` |
+
+### 9.1 Clinical extension: separate plans, ordered, with two non-overlapping confidence leaks
+
+The clinical workstream (`VerifiedClaim` + terminology reconciliation) is **two separate
+specs/plans**, not one, because the two are orthogonal (claim-faithfulness vs.
+entity-identity) and have different seams. Both depend on the v1 KG. **Order:
+reconciliation first, then `VerifiedClaim`** — entity identity is upstream of claim
+trust: if `imatinib` and `gleevec` are separate nodes, cross-source Beta-Bernoulli
+aggregation fragments and any faithfulness guarantee over them means little.
+(imatinib↔gleevec is specifically an **RxNorm** brand/generic relation, not LOINC/SNOMED;
+prefer a confidence-weighted `:maps_to` soft link to the canonical *ingredient* concept
+over a destructive URI merge, so provenance survives.)
+
+**Two independent leaks in "many papers agree → high confidence" — do not conflate:**
+
+- **Leak A — faithfulness.** Is each vote real? Failure: the extractor hallucinates/
+  misattributes a claim to a paper. A fake vote inflates α. **`VerifiedClaim` closes
+  this** by checking each evidence→claim link against source, so a fake vote gets
+  `verified→0` and never enters α.
+- **Leak B — independence.** Are the votes distinct observations? Failure: N papers
+  tracing to one primary study / same lab / reviews restating a finding — each vote is
+  *faithful* but correlated, so counting them as N independent α-increments overstates
+  confidence. **`VerifiedClaim` does NOT close this** — verification is per-edge;
+  correlation is a relationship *between* edges. A fully verified graph can still be
+  badly over-confident via a citation cascade. Closing Leak B needs different inputs
+  (citation/co-authorship — `cites` is reserved) and different math (novelty discount,
+  or a hierarchical/random-effects model grouping papers by source-cluster). It is its
+  own reserved item, NOT a `VerifiedClaim` extension.
+
+**Probability-flow limits.** The Beta mean `α/(α+β)` is structurally bounded in (0,1)
+with the `Beta(1,1)` prior — it asymptotes, never saturates. Verification's role is to
+bound confidence at the *grounded* evidence mass (Leak A), not to change that ceiling.
+
+**`VerifiedClaim` spec contents (when authored):**
+- *v1:* scalar `verified ∈ [0,1]` multiplier on `evidence_weight` (`verified * (0.3 +
+  0.65*relevance/100)`); `VerifiedClaim` = an `Evidence`/`WeightedEdge` whose `verified`
+  is populated by the verification pass.
+- *Documented extension (same spec):* hierarchical **Beta-Binomial** — model
+  verification as its own Beta belief (verified k of n checks) and propagate the
+  uncertainty instead of collapsing to a scalar. Shares the same `verified` field; this
+  is the "if it matters clinically" upgrade, kept in-spec to record why the scalar is a
+  deliberate simplification. The correlation discount (Leak B) explicitly does **not**
+  belong in this spec.
 
 ## 10. Node Wiring
 

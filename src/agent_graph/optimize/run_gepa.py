@@ -27,16 +27,20 @@ def build_lm(max_tokens: int = 8192):
     return dspy.LM(MODEL, api_key=os.environ["ANTHROPIC_API_KEY"], max_tokens=max_tokens)
 
 
-def compile_program(trainset, valset=None, auto: str = "light"):
+def compile_program(trainset, valset=None, max_metric_calls: int = 30):
     """Run GEPA to evolve the summarizer instruction. Returns the optimized module.
 
     `trainset`/`valset` are lists of dspy.Example(query=..., papers=...) with the
     gold also carrying `.papers` (list[dict] with pmids) for the metric's grounding
     and judge checks. Keep a held-out `valset` to confirm generalization.
+
+    `max_metric_calls` bounds cost/time explicitly (GEPA `auto='light'` budgeted
+    ~748 rollouts / hours here). Raise it for a more thorough search.
     """
     lm = build_lm()
     dspy.configure(lm=lm)
-    optimizer = dspy.GEPA(metric=summarizer_metric, reflection_lm=lm, auto=auto)
+    optimizer = dspy.GEPA(metric=summarizer_metric, reflection_lm=lm,
+                          max_metric_calls=max_metric_calls)
     return optimizer.compile(DualAudienceProgram(), trainset=trainset,
                              valset=valset or trainset)
 

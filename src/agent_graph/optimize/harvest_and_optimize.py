@@ -78,10 +78,11 @@ def main():
     split = max(1, int(len(examples) * 0.7))
     trainset = examples[:split]
     valset = examples[split:] or examples[:1]
+    max_metric_calls = int(os.environ.get("GEPA_MAX_METRIC_CALLS", "30"))
     print(f"\n{len(examples)} examples ({len(trainset)} train / {len(valset)} val). "
-          f"Running GEPA (auto='light')...\n")
+          f"Running GEPA (max_metric_calls={max_metric_calls})...\n")
 
-    optimized = compile_program(trainset, valset=valset, auto="light")
+    optimized = compile_program(trainset, valset=valset, max_metric_calls=max_metric_calls)
 
     print("\n=== EVOLVED CLINICIAN INSTRUCTION (paste into CLINICIAN_GUIDANCE) ===\n")
     print(optimized.clinician.signature.instructions)

@@ -7,27 +7,29 @@ The rest of the LangGraph pipeline is untouched.
 """
 import dspy
 
+from agent_graph.schemas import ClinicianSummary, TechnicalSummary
+
 
 class GenerateClinician(dspy.Signature):
     """Given a research question and the retrieved papers, write a clinician
-    summary as JSON matching ClinicianSummary. Cite ONLY PMIDs present in the
-    retrieved papers; never invent a citation, and never reuse one PMID for two
-    different papers."""
+    summary. Cite ONLY PMIDs present in the retrieved papers; never invent a
+    citation, and never reuse one PMID for two different papers."""
 
     query: str = dspy.InputField(desc="The clinical question")
     papers: str = dspy.InputField(desc="Retrieved papers, each with its PMID")
-    clinician_summary: dict = dspy.OutputField(desc="ClinicianSummary as JSON")
+    # Pydantic-typed output so DSPy's adapter enforces the schema (a plain `dict`
+    # produces non-conforming summaries that the metric's schema gate zeroes).
+    clinician_summary: ClinicianSummary = dspy.OutputField()
 
 
 class GenerateTechnical(dspy.Signature):
     """Given a research question and the retrieved papers, write a technical
-    summary as JSON matching TechnicalSummary. Cite ONLY PMIDs present in the
-    retrieved papers; never invent a citation, and never reuse one PMID for two
-    different papers."""
+    summary. Cite ONLY PMIDs present in the retrieved papers; never invent a
+    citation, and never reuse one PMID for two different papers."""
 
     query: str = dspy.InputField(desc="The research question")
     papers: str = dspy.InputField(desc="Retrieved papers, each with its PMID")
-    technical_summary: dict = dspy.OutputField(desc="TechnicalSummary as JSON")
+    technical_summary: TechnicalSummary = dspy.OutputField()
 
 
 class DualAudienceProgram(dspy.Module):

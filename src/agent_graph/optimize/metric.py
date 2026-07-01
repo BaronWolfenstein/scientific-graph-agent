@@ -54,7 +54,15 @@ def _ungrounded(cs, ts, papers):
 
 
 def _as_dict(x):
-    """DSPy typed outputs may arrive as JSON strings; coerce to dict or None."""
+    """Normalize a DSPy output field to a plain dict (or None).
+
+    Handles Pydantic model instances (typed OutputFields), JSON strings, and
+    plain dicts — so the schema/grounding checks always see a dict.
+    """
+    if x is None:
+        return None
+    if hasattr(x, "model_dump"):        # Pydantic BaseModel instance
+        return x.model_dump()
     if isinstance(x, str):
         try:
             return json.loads(x)

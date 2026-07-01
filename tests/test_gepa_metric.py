@@ -77,3 +77,18 @@ def test_metric_coerces_json_string_summaries():
                             _Pred(json.dumps(_clin()), json.dumps(_tech())),
                             faithfulness_fn=_HIGH_FAITH, relevance_fn=_HIGH_REL)
     assert out.score > 0.9
+
+
+def test_metric_accepts_pydantic_model_instances():
+    # With Pydantic-typed DSPy OutputFields, pred fields are model instances.
+    from agent_graph.schemas import ClinicianSummary, TechnicalSummary
+    from agent_graph.optimize.metric import summarizer_metric
+    cs = ClinicianSummary(bottom_line="x", key_findings=["f"],
+                          evidence=[{"claim": "c", "pmid": "111", "source_url": "u"}],
+                          confidence_note="n")
+    ts = TechnicalSummary(detailed_findings="d", methodology_notes="m",
+                          evidence=[{"claim": "c", "pmid": "111", "source_url": "u"}],
+                          caveats=["cav"])
+    out = summarizer_metric(_Gold("q", _papers()), _Pred(cs, ts),
+                            faithfulness_fn=_HIGH_FAITH, relevance_fn=_HIGH_REL)
+    assert out.score > 0.9

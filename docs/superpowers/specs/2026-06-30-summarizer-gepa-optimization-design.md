@@ -98,6 +98,44 @@ Scoring:
   is a documented follow-up (§10). The automatic gate + judges are sufficient to
   begin optimizing.
 
+### 6.1 Query-family generalization
+
+GEPA optimizes ONE prompt against the training distribution — an average-case
+optimum. Whether a single prompt suffices depends on whether query families
+(oncology-therapy, cardiology/metabolic outcomes, neurology, **pathology**
+[diagnostic/computational/molecular], epidemiology, …) diverge in what "good"
+looks like. Three things make one prompt viable *here*:
+
+- **The metric is family-agnostic.** Schema + grounding + faithfulness +
+  answer-relevance are the same invariants across every specialty. What varies by
+  family is content/emphasis, not the correctness objective — and the metric only
+  scores the objective. So the evolved instruction's transferable core (cite only
+  retrieved PMIDs, one PMID = one paper, structure, hedge when thin) generalizes.
+- **GEPA can evolve *conditional* instructions** ("for interventional questions
+  emphasize N/endpoints; for diagnostic-accuracy questions emphasize
+  sensitivity/specificity and the reference standard") when the trainset spans
+  families, rather than a bland compromise.
+- **Prompts generalize across families far better than fine-tuned weights**, so
+  prompt-level optimization is the right tool for a single cross-family artifact.
+
+**Decision rule (measure, don't guess):**
+1. Train ONE prompt on a deliberately diverse seed set spanning all families
+   (`SEED_QUERIES` includes oncology, cardiology/metabolic, neurology, and three
+   pathology queries). Scale to ~20–40 (several per family) — 6–9 overfits those
+   specific queries.
+2. Evaluate on a **held-out valset** with per-family breakdown.
+3. If per-family scores are uniform → ship the single prompt. **Only if a family
+   lags materially** → go family-conditioned: cluster queries into families, GEPA
+   per cluster, and route at inference (classify query → family → select prompt).
+   That router + prompt-per-family registry is real machinery — do NOT build it
+   until the measurement justifies it (YAGNI).
+
+**Deploy target (per §7):** the two evolved instructions map 1:1 onto the live
+node's guidance because the DSPy program has two signatures
+(`GenerateClinician`/`GenerateTechnical`) matching the two `dual_audience_node`
+SystemMessages. Deploy by editing the `CLINICIAN_GUIDANCE` / `TECHNICAL_GUIDANCE`
+constants in `nodes.py`; the grounding rule + JSON schema stay fixed.
+
 ## 7. Offline compile / deploy loop
 
 `run_gepa.py`:

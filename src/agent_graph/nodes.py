@@ -821,6 +821,29 @@ def _generate_with_retry(llm, messages: list, schema_cls) -> tuple:
 # DUAL-AUDIENCE STRUCTURED-OUTPUT NODE
 # ============================================================================
 
+# Swappable prompt assets: the natural-language guidance for each audience.
+# GEPA (agent_graph.optimize) evolves these; deploy an optimized instruction by
+# editing the constant — the grounding rule + JSON schema (the gate contract)
+# stay fixed and are composed in by _audience_system_prompt.
+CLINICIAN_GUIDANCE = (
+    "You are a clinical evidence synthesizer writing for a treating physician."
+)
+TECHNICAL_GUIDANCE = (
+    "You are a research methodologist writing for a clinical scientist or statistician."
+)
+
+
+def _audience_system_prompt(guidance: str, grounding_rule: str, schema_str: str) -> str:
+    """Compose an audience system prompt from its (swappable) guidance, the
+    grounding rule, and the fixed JSON schema contract."""
+    return (
+        f"{guidance}\n"
+        f"{grounding_rule}\n"
+        "Return ONLY valid JSON matching this schema (no markdown fence):\n"
+        f"{schema_str}"
+    )
+
+
 def dual_audience_node(state: InternalState) -> dict:
     """
     Generates two Pydantic-validated summaries from retrieved papers:
@@ -865,12 +888,8 @@ def dual_audience_node(state: InternalState) -> dict:
 }"""
 
     clinician_messages = [
-        SystemMessage(content=(
-            f"You are a clinical evidence synthesizer writing for a treating physician.\n"
-            f"{grounding_rule}\n"
-            "Return ONLY valid JSON matching this schema (no markdown fence):\n"
-            f"{clinician_schema_str}"
-        )),
+        SystemMessage(content=_audience_system_prompt(
+            CLINICIAN_GUIDANCE, grounding_rule, clinician_schema_str)),
         HumanMessage(content=(
             f"Clinical question: {query}\n\n"
             f"Retrieved papers:\n{papers_context}\n\n"
@@ -894,12 +913,8 @@ def dual_audience_node(state: InternalState) -> dict:
 }"""
 
     technical_messages = [
-        SystemMessage(content=(
-            f"You are a research methodologist writing for a clinical scientist or statistician.\n"
-            f"{grounding_rule}\n"
-            "Return ONLY valid JSON matching this schema (no markdown fence):\n"
-            f"{technical_schema_str}"
-        )),
+        SystemMessage(content=_audience_system_prompt(
+            TECHNICAL_GUIDANCE, grounding_rule, technical_schema_str)),
         HumanMessage(content=(
             f"Research question: {query}\n\n"
             f"Retrieved papers:\n{papers_context}\n\n"

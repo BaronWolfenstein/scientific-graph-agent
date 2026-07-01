@@ -10,7 +10,8 @@ Usage (from a script or notebook):
     trainset = [dspy.Example(query=q, papers=p).with_inputs("query", "papers")
                 for q, p in harvested_examples]
     optimized = compile_program(trainset, valset=heldout)
-    print(optimized.generate.signature.instructions)   # the evolved prompt
+    print(optimized.clinician.signature.instructions)   # -> paste into CLINICIAN_GUIDANCE
+    print(optimized.technical.signature.instructions)   # -> paste into TECHNICAL_GUIDANCE
 """
 import os
 import dspy

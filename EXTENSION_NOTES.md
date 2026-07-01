@@ -68,10 +68,15 @@ by Lina Faik. I adapted and instrumented the existing framework — I did not au
      via the `jsonschema` lib (added to `pyproject.toml`).
   2. **Grounding** — every cited PMID must be in the retrieved set (a cross-document
      constraint JSON Schema cannot express); catches hallucinated citations.
+  3. **PMID identity** (`_pmid_conflicts`) — one PMID = one paper: catches the
+     LIGER/Seurat *collision* (a PMID cited with conflicting sources) and
+     *mis-attribution* (a cited PMID's source disagrees with the retrieved record).
+     Deterministic, no extra API; the same invariant the KG reserves as
+     FUNCTIONAL(pmid).
 - Invalid drafts loop back to regenerate, bounded by `max_iterations` (gate bumps
   `iteration`); added `validation_errors` field to `InternalState`.
-- Tested in `tests/test_validate_output.py` (5 tests: valid, structural, grounding,
-  loop-break, wiring).
+- Tested in `tests/test_validate_output.py` (7 tests: valid, structural, grounding,
+  PMID collision, PMID mis-attribution, loop-break, wiring).
 - **Why JSON Schema and not JSONB/JSON-LD:** JSON Schema *validates*; the other two
   solve adjacent, later problems and are reserved (see KG design spec §9):
   - **JSONB** — persist *approved* summaries in Postgres for audit/query
@@ -89,13 +94,23 @@ by Lina Faik. I adapted and instrumented the existing framework — I did not au
     grounding, same invariants as the pre-HITL gate) × quality judges
     (`compute_faithfulness` + `compute_answer_relevance`, reused from `eval/`).
     Judges are injectable → deterministic parts unit-tested without API.
-  - `program.py` — `DualAudienceProgram` (DSPy `Signature`+`Module`) wrapping only
-    the generation step.
+  - `program.py` — `DualAudienceProgram` with **two** signatures
+    (`GenerateClinician`/`GenerateTechnical`) matching the two `dual_audience_node`
+    SystemMessages, so each evolved instruction deploys 1:1.
   - `run_gepa.py` — offline `compile_program(trainset)` wiring `dspy.GEPA`; consumes
     API budget, not run by tests or the pipeline.
-- Added `dspy>=3.2` to `pyproject.toml`. Tests: `tests/test_gepa_metric.py` (4),
-  `tests/test_gepa_program.py` (2).
-- Design: `docs/superpowers/specs/2026-06-30-summarizer-gepa-optimization-design.md`.
+  - `harvest_and_optimize.py` — ready-to-run: regenerates `(query, papers)` examples
+    from demo runs across families (oncology, cardiology/metabolic, neurology,
+    **pathology**), splits train/val, prints the two evolved instructions.
+- Deploy target: the guidance is extracted to swappable constants
+  `CLINICIAN_GUIDANCE` / `TECHNICAL_GUIDANCE` in `nodes.py` (composed by
+  `_audience_system_prompt`); the grounding rule + JSON schema stay fixed. Paste an
+  evolved instruction into the matching constant.
+- Added `dspy>=3.2` to `pyproject.toml`. Tests: `test_gepa_metric.py` (5),
+  `test_gepa_program.py` (4), `test_dual_audience_prompt.py` (1).
+- Design: `docs/superpowers/specs/2026-06-30-summarizer-gepa-optimization-design.md`
+  (§6.1 = query-family generalization: one prompt vs family-conditioned;
+  measure-per-family, shard only if divergent).
 - Fully decoupled from the knowledge graph; uses only signals that exist in the
   built demo. HITL reject-reason capture + label trainset are a documented follow-up.
 

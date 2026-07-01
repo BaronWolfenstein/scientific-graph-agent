@@ -18,13 +18,24 @@ import dspy
 from agent_graph.graph import create_demo_graph
 from agent_graph.optimize.run_gepa import compile_program
 
+# Deliberately cross-family so GEPA evolves an instruction that generalizes
+# (oncology, cardiology, endocrine/metabolic, neurology, and PATHOLOGY). Scale
+# this up (~20-40, several per family) before trusting a single prompt; the
+# held-out valset measures per-family generalization (see spec 2026-06-30 §6.1).
 SEED_QUERIES = [
+    # oncology (therapy)
     "CAR-T cell therapy efficacy and safety in relapsed refractory diffuse large B-cell lymphoma",
     "efficacy of pembrolizumab in triple-negative breast cancer",
+    # cardiology / metabolic
     "SGLT2 inhibitors and cardiovascular outcomes in heart failure",
     "GLP-1 receptor agonists for weight loss in non-diabetic adults",
     "statins for primary prevention of cardiovascular disease in older adults",
+    # neurology
     "anti-amyloid monoclonal antibodies for early Alzheimer's disease",
+    # pathology (diagnostic / computational / molecular)
+    "diagnostic accuracy of PD-L1 immunohistochemistry for predicting checkpoint-inhibitor response in NSCLC",
+    "deep learning for Gleason grading of prostate biopsies in digital pathology",
+    "methylation-profiling molecular classification of diffuse gliomas",
 ]
 
 
@@ -63,8 +74,10 @@ def main():
 
     optimized = compile_program(trainset, valset=valset, auto="light")
 
-    print("\n=== EVOLVED INSTRUCTION (review, then paste into dual_audience_node) ===\n")
-    print(optimized.generate.signature.instructions)
+    print("\n=== EVOLVED CLINICIAN INSTRUCTION (paste into CLINICIAN_GUIDANCE) ===\n")
+    print(optimized.clinician.signature.instructions)
+    print("\n=== EVOLVED TECHNICAL INSTRUCTION (paste into TECHNICAL_GUIDANCE) ===\n")
+    print(optimized.technical.signature.instructions)
 
 
 if __name__ == "__main__":

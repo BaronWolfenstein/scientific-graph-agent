@@ -5,12 +5,15 @@ The real GEPA optimization run is offline/API-bound and is NOT exercised here.
 import pytest
 
 
-def test_program_constructs():
-    from agent_graph.optimize.program import DualAudienceProgram, GenerateDualAudience
+def test_program_has_two_signatures_matching_the_node():
+    from agent_graph.optimize.program import (
+        DualAudienceProgram, GenerateClinician, GenerateTechnical,
+    )
     prog = DualAudienceProgram()
-    assert prog is not None
-    # Signature carries the grounding instruction GEPA will evolve from
-    assert "PMIDs" in GenerateDualAudience.__doc__
+    # one predictor per live SystemMessage, so evolved instructions map 1:1
+    assert hasattr(prog, "clinician") and hasattr(prog, "technical")
+    assert "PMIDs" in GenerateClinician.__doc__
+    assert "PMIDs" in GenerateTechnical.__doc__
 
 
 def test_harness_exposes_compile_entrypoint():

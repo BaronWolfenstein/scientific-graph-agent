@@ -328,6 +328,21 @@ async def search_wikipedia_streaming(topic: str, sentences: int = 5) -> dict:
     return await _fetch_wikipedia_summary_async(topic, sentences, writer)
 
 
+def _abstract_text(article) -> str:
+    """Join all <AbstractText> sections of a PubMed article into one string.
+
+    Always returns a string (never None): handles empty AbstractText, structured
+    multi-section abstracts, and nested markup. Guards downstream consumers that
+    slice `paper['summary']`.
+    """
+    parts = []
+    for el in article.findall(".//AbstractText"):
+        text = "".join(el.itertext()).strip()
+        if text:
+            parts.append(text)
+    return " ".join(parts)
+
+
 def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
     """Fetch PubMed results via NCBI E-utilities (esearch + efetch). No extra deps."""
     # Step 1: esearch — get PMIDs
@@ -360,7 +375,6 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
     for article in root.findall(".//PubmedArticle"):
         pmid_el = article.find(".//PMID")
         title_el = article.find(".//ArticleTitle")
-        abstract_el = article.find(".//AbstractText")
         year = article.findtext(".//PubDate/Year", "N/A")
 
         author_els = article.findall(".//Author")
@@ -374,7 +388,7 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
         pmid = pmid_el.text if pmid_el is not None else ""
         # ArticleTitle may contain sub-elements (e.g. <i>); collect all text
         title = "".join(title_el.itertext()) if title_el is not None else "Unknown Title"
-        abstract = abstract_el.text if abstract_el is not None else ""
+        abstract = _abstract_text(article)
 
         papers.append({
             "id": pmid,

@@ -14,9 +14,14 @@ Then review the printed evolved instruction and paste it into
 """
 import os
 import dspy
+from pathlib import Path
+from dotenv import load_dotenv
 
 from agent_graph.graph import create_demo_graph
 from agent_graph.optimize.run_gepa import compile_program
+
+# pick up ANTHROPIC_API_KEY from the repo-root .env (src/agent_graph/optimize/ -> repo root)
+load_dotenv(Path(__file__).resolve().parents[3] / ".env")
 
 # Deliberately cross-family so GEPA evolves an instruction that generalizes
 # (oncology, cardiology, endocrine/metabolic, neurology, and PATHOLOGY). Scale
@@ -45,10 +50,14 @@ def harvest(queries=SEED_QUERIES, max_papers=4):
     PMIDs; the program formats it to text at generation time."""
     examples = []
     for i, q in enumerate(queries):
-        graph = create_demo_graph()
-        config = {"configurable": {"thread_id": f"harvest-{i}"}}
-        graph.invoke({"query": q, "max_papers": max_papers}, config=config)
-        papers = graph.get_state(config).values.get("papers", [])
+        try:
+            graph = create_demo_graph()
+            config = {"configurable": {"thread_id": f"harvest-{i}"}}
+            graph.invoke({"query": q, "max_papers": max_papers}, config=config)
+            papers = graph.get_state(config).values.get("papers", [])
+        except Exception as exc:  # one bad query must not abort the whole harvest
+            print(f"  SKIP '{q[:50]}...': {type(exc).__name__}: {exc}")
+            continue
         if papers:
             examples.append(
                 dspy.Example(query=q, papers=papers).with_inputs("query", "papers")

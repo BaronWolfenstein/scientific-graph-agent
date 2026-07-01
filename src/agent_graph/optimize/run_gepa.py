@@ -18,6 +18,7 @@ import dspy
 
 from agent_graph.optimize.program import DualAudienceProgram
 from agent_graph.optimize.metric import summarizer_metric
+from agent_graph.eval.faithfulness import compute_faithfulness_single
 
 MODEL = "anthropic/claude-sonnet-4-6"
 
@@ -27,7 +28,8 @@ def build_lm(max_tokens: int = 8192):
     return dspy.LM(MODEL, api_key=os.environ["ANTHROPIC_API_KEY"], max_tokens=max_tokens)
 
 
-def compile_program(trainset, valset=None, max_metric_calls: int = 30):
+def compile_program(trainset, valset=None, max_metric_calls: int = 30,
+                    faithfulness_fn=compute_faithfulness_single):
     """Run GEPA to evolve the summarizer instruction. Returns the optimized module.
 
     `trainset`/`valset` are lists of dspy.Example(query=..., papers=...) with the
@@ -36,10 +38,18 @@ def compile_program(trainset, valset=None, max_metric_calls: int = 30):
 
     `max_metric_calls` bounds cost/time explicitly (GEPA `auto='light'` budgeted
     ~748 rollouts / hours here). Raise it for a more thorough search.
+
+    `faithfulness_fn` defaults to the single-call variant (compute_faithfulness_single)
+    to cut per-eval cost ~3-4x; pass compute_faithfulness for the multi-call judge.
     """
     lm = build_lm()
     dspy.configure(lm=lm)
-    optimizer = dspy.GEPA(metric=summarizer_metric, reflection_lm=lm,
+
+    def metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
+        return summarizer_metric(gold, pred, trace, pred_name, pred_trace,
+                                 faithfulness_fn=faithfulness_fn)
+
+    optimizer = dspy.GEPA(metric=metric, reflection_lm=lm,
                           max_metric_calls=max_metric_calls)
     return optimizer.compile(DualAudienceProgram(), trainset=trainset,
                              valset=valset or trainset)

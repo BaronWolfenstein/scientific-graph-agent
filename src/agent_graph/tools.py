@@ -7,8 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import asyncio
 import json
+import time
 import urllib.request
 import urllib.parse
+import urllib.error
 import xml.etree.ElementTree as ET
 
 NCBI_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -343,6 +345,26 @@ def _abstract_text(article) -> str:
     return " ".join(parts)
 
 
+def _urlopen_retry(url: str, timeout: int = 15, retries: int = 4, backoff: float = 0.5):
+    """urlopen with exponential backoff on NCBI rate-limiting (HTTP 429) and
+    transient 5xx / connection errors. Other HTTP errors (e.g. 404) are not
+    retried. Returns the response (a context manager)."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return urllib.request.urlopen(url, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code == 429 or 500 <= e.code < 600:
+                time.sleep(backoff * (2 ** attempt))
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_err = e
+            time.sleep(backoff * (2 ** attempt))
+    raise last_err
+
+
 def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
     """Fetch PubMed results via NCBI E-utilities (esearch + efetch). No extra deps."""
     # Step 1: esearch — get PMIDs
@@ -353,7 +375,7 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
         "retmode": "json",
     })
     esearch_url = f"{NCBI_BASE}/esearch.fcgi?{params}"
-    with urllib.request.urlopen(esearch_url, timeout=15) as r:
+    with _urlopen_retry(esearch_url, timeout=15) as r:
         data = json.loads(r.read())
     pmids = data.get("esearchresult", {}).get("idlist", [])
     if not pmids:
@@ -367,7 +389,7 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
         "retmode": "xml",
     })
     efetch_url = f"{NCBI_BASE}/efetch.fcgi?{params}"
-    with urllib.request.urlopen(efetch_url, timeout=15) as r:
+    with _urlopen_retry(efetch_url, timeout=15) as r:
         xml_data = r.read()
 
     root = ET.fromstring(xml_data)

@@ -15,6 +15,7 @@ Scoring:
                  defeats the degenerate "say nothing / stay faithful" summary)
       grounding = 1.0 if all cited PMIDs were retrieved else 0.3
 """
+import json
 import jsonschema
 import dspy
 
@@ -52,6 +53,16 @@ def _ungrounded(cs, ts, papers):
     return bad
 
 
+def _as_dict(x):
+    """DSPy typed outputs may arrive as JSON strings; coerce to dict or None."""
+    if isinstance(x, str):
+        try:
+            return json.loads(x)
+        except (ValueError, TypeError):
+            return None
+    return x
+
+
 def _render_text(cs, ts):
     parts = []
     if cs:
@@ -69,8 +80,8 @@ def summarizer_metric(gold, pred, trace=None, pred_name=None, pred_trace=None,
                       *, faithfulness_fn=compute_faithfulness,
                          relevance_fn=compute_answer_relevance):
     """GEPA metric: dspy.Prediction(score in [0,1], feedback str)."""
-    cs = getattr(pred, "clinician_summary", None)
-    ts = getattr(pred, "technical_summary", None)
+    cs = _as_dict(getattr(pred, "clinician_summary", None))
+    ts = _as_dict(getattr(pred, "technical_summary", None))
     papers = getattr(gold, "papers", None) or []
     query = getattr(gold, "query", "")
 

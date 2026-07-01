@@ -67,3 +67,13 @@ def test_low_relevance_defeats_degenerate_summary():
                             faithfulness_fn=_HIGH_FAITH, relevance_fn=_LOW_REL)
     assert out.score < 0.6
     assert "does not answer" in out.feedback
+
+
+def test_metric_coerces_json_string_summaries():
+    # DSPy typed outputs may arrive as JSON strings; the metric must parse them.
+    import json
+    from agent_graph.optimize.metric import summarizer_metric
+    out = summarizer_metric(_Gold("q", _papers()),
+                            _Pred(json.dumps(_clin()), json.dumps(_tech())),
+                            faithfulness_fn=_HIGH_FAITH, relevance_fn=_HIGH_REL)
+    assert out.score > 0.9

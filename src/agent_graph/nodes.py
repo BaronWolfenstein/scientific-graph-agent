@@ -937,14 +937,57 @@ _CLINICIAN_SCHEMA = ClinicianSummary.model_json_schema()
 _TECHNICAL_SCHEMA = TechnicalSummary.model_json_schema()
 
 
+def _pmid_conflicts(cs: dict, ts: dict, papers: list) -> list:
+    """Deterministic PMID-identity checks (the LIGER/Seurat collision class).
+
+    A PMID identifies exactly one paper. Two failures are caught with no extra
+    API call — the same identity invariant the KG enforces via FUNCTIONAL(pmid):
+      - collision: one PMID cited with conflicting sources (two papers, one PMID);
+      - mis-attribution: a cited PMID's source disagrees with the retrieved record.
+    """
+    cited = []
+    for obj in (cs, ts):
+        for ev in (obj or {}).get("evidence", []):
+            pmid = ev.get("pmid")
+            if pmid:
+                cited.append((pmid, ev.get("source_url")))
+
+    errors = []
+    # collision — one PMID mapped to more than one distinct source
+    by_pmid = {}
+    for pmid, url in cited:
+        by_pmid.setdefault(pmid, set()).add(url)
+    for pmid, urls in by_pmid.items():
+        distinct = {u for u in urls if u}
+        if len(distinct) > 1:
+            errors.append(
+                f"PMID {pmid} cited with conflicting sources {sorted(distinct)} "
+                f"— one PMID identifies one paper"
+            )
+
+    # mis-attribution — cited source disagrees with the retrieved record for that PMID
+    retrieved = {p.get("pmid"): p.get("url") for p in papers
+                 if p.get("pmid") and p.get("url")}
+    for pmid, url in cited:
+        true_url = retrieved.get(pmid)
+        if url and true_url and url != true_url:
+            errors.append(
+                f"PMID {pmid} cited as {url} but retrieved record is {true_url}"
+            )
+    return errors
+
+
 def validate_output_node(state: InternalState) -> dict:
     """Machine-validate the two draft summaries BEFORE a human ever sees them.
 
-    Two layers:
+    Three layers:
       1. Structural — JSON Schema (required fields, types) per document.
       2. Grounding — every cited PMID must be one we actually retrieved
          (a cross-document constraint JSON Schema cannot express), so a
          hallucinated citation never reaches a clinical reviewer.
+      3. PMID identity — one PMID = one paper; catches the LIGER/Seurat
+         collision (conflicting sources) and mis-attribution vs. the retrieved
+         record. Deterministic, no extra API call.
 
     On error it bumps `iteration` so a regenerate loop is bounded by
     `max_iterations`. The human then only ever adjudicates well-formed,
@@ -976,6 +1019,12 @@ def validate_output_node(state: InternalState) -> dict:
                 pmid = ev.get("pmid")
                 if pmid and pmid not in allowed:
                     errors.append(f"{name}: ungrounded citation pmid:{pmid}")
+
+    # (3) PMID identity — collision + mis-attribution
+    errors.extend(_pmid_conflicts(state.get("clinician_summary"),
+                                  state.get("technical_summary"),
+                                  state.get("papers", [])))
+    errors = list(dict.fromkeys(errors))  # dedupe, preserve order
 
     if errors:
         logging.warning(f"⚠️  Pre-HITL validation found {len(errors)} issue(s): {errors}")

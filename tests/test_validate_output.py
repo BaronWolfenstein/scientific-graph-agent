@@ -59,3 +59,39 @@ def test_demo_graph_includes_validate_output():
     from agent_graph.graph import create_demo_graph
     g = create_demo_graph()
     assert "validate_output" in g.get_graph().nodes
+
+
+def test_pmid_collision_conflicting_sources_flagged():
+    """One PMID cited for two different papers (conflicting sources) — the
+    LIGER/Seurat-style collision — must be flagged."""
+    from agent_graph.nodes import validate_output_node
+    cs = {"audience": "clinician", "bottom_line": "b", "key_findings": ["f"],
+          "evidence": [{"claim": "seurat", "pmid": "31178118",
+                        "source_url": "https://doi.org/10.1016/j.cell.2019.05.031"}],
+          "confidence_note": "n"}
+    ts = {"audience": "technical", "detailed_findings": "d", "methodology_notes": "m",
+          "evidence": [{"claim": "liger", "pmid": "31178118",
+                        "source_url": "https://doi.org/10.1016/j.cell.2019.05.006"}],
+          "caveats": ["cav"]}
+    state = {"clinician_summary": cs, "technical_summary": ts,
+             "papers": [{"id": "31178118", "pmid": "31178118", "title": "T"}],
+             "iteration": 0, "max_iterations": 2}
+    out = validate_output_node(state)
+    assert any("31178118" in e and "conflicting" in e for e in out["validation_errors"])
+
+
+def test_pmid_source_mismatch_vs_retrieval_flagged():
+    """A cited PMID whose source_url disagrees with the retrieved record
+    (mis-attribution) must be flagged — using retrieval data, no extra API."""
+    from agent_graph.nodes import validate_output_node
+    ev = [{"claim": "c", "pmid": "111", "source_url": "https://doi.org/wrong"}]
+    cs = {"audience": "clinician", "bottom_line": "b", "key_findings": ["f"],
+          "evidence": ev, "confidence_note": "n"}
+    ts = {"audience": "technical", "detailed_findings": "d", "methodology_notes": "m",
+          "evidence": ev, "caveats": ["cav"]}
+    state = {"clinician_summary": cs, "technical_summary": ts,
+             "papers": [{"id": "111", "pmid": "111", "title": "T",
+                         "url": "https://pubmed.ncbi.nlm.nih.gov/111/"}],
+             "iteration": 0, "max_iterations": 2}
+    out = validate_output_node(state)
+    assert any("111" in e and "retrieved record" in e for e in out["validation_errors"])

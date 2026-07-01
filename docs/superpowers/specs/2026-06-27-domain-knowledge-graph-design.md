@@ -292,6 +292,34 @@ bound confidence at the *grounded* evidence mass (Leak A), not to change that ce
   deliberate simplification. The correlation discount (Leak B) explicitly does **not**
   belong in this spec.
 
+**Ordinal-CLMM alternative (richer tier of the same upgrade).** The scalar and the
+Beta-Binomial both treat verification as *binary* (supported / not). A cleaner
+formulation recasts the judge's output as an **ordinal support level** per
+(claim, paper) — `1=contradicts, 2=unsupported, 3=partial, 4=full` — and fits a
+Bayesian **cumulative-link mixed model** (CLMM). This unifies three concerns the
+earlier tiers split:
+- `support ~ 1 + (1 | claim) + (1 | source_cluster)`, `family = cumulative()`.
+- `(1 | claim)` → each claim's latent true-support random intercept, partial-pooled
+  across its evidence; its posterior IS the confidence, with a credible interval for
+  free (replaces the `confidence_lb` heuristic).
+- `(1 | source_cluster)` → papers grouped by lab / author / citation lineage share an
+  effect, so a citation cascade contributes ~one pooled voice, not N votes. This is
+  the **Leak-B / independence discount done principledly** — the one thing the
+  Beta-Binomial tier does NOT fix — so here Leak B *does* fold in, via the grouping
+  factor (contrast with the note above: it stays out of the *scalar/Beta-Binomial*
+  tiers, not the CLMM).
+- Estimated cutpoints make support graded, not a binary count.
+
+Seam mapping: `eval/faithfulness.py` emits an ordinal level instead of binary;
+`confidence.py`'s closed-form Beta-Bernoulli is replaced by a **fitted CLMM over
+accumulated evidence** (offline/batch, not per-edge). Trade-offs: MCMC + fitting cost
+(not instant), needs enough evidence per claim/cluster or posteriors go honestly wide,
+and confidence semantics shift from Beta(α,β) to a latent ordinal scale — so this is
+the most-reserved "principled but expensive" tier, aligned with the same
+"if it matters clinically" gate. Reference implementation: Kruschke/Kurz-style `brms`
+(R, `family=cumulative()`); our Python stack would port to **`bambi`** (brms-like on
+PyMC) or PyMC/NumPyro.
+
 **Bitemporality is a third, independent axis — not part of either clinical plan.**
 Reconciliation fixes entity identity; `VerifiedClaim` fixes claim faithfulness;
 bitemporality versions facts over time (valid-time + transaction-time). Its trigger is

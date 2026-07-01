@@ -81,6 +81,24 @@ by Lina Faik. I adapted and instrumented the existing framework — I did not au
     LOINC/SNOMED/RxNorm URIs so an approved summary becomes a node in the reserved
     RDF-star knowledge graph; the semantic-interop bridge.
 
+### 8. Offline GEPA prompt optimization (2026-06-30, decoupled)
+- New `src/agent_graph/optimize/` package — offline tooling, NOT imported by the
+  live LangGraph pipeline:
+  - `metric.py` — `summarizer_metric(gold, pred, ...)` returning
+    `dspy.Prediction(score, feedback)`: hard gates (JSON Schema + citation
+    grounding, same invariants as the pre-HITL gate) × quality judges
+    (`compute_faithfulness` + `compute_answer_relevance`, reused from `eval/`).
+    Judges are injectable → deterministic parts unit-tested without API.
+  - `program.py` — `DualAudienceProgram` (DSPy `Signature`+`Module`) wrapping only
+    the generation step.
+  - `run_gepa.py` — offline `compile_program(trainset)` wiring `dspy.GEPA`; consumes
+    API budget, not run by tests or the pipeline.
+- Added `dspy>=3.2` to `pyproject.toml`. Tests: `tests/test_gepa_metric.py` (4),
+  `tests/test_gepa_program.py` (2).
+- Design: `docs/superpowers/specs/2026-06-30-summarizer-gepa-optimization-design.md`.
+- Fully decoupled from the knowledge graph; uses only signals that exist in the
+  built demo. HITL reject-reason capture + label trainset are a documented follow-up.
+
 ## What was NOT changed
 - ArXiv and Wikipedia tools and nodes (intact, still usable)
 - `create_graph`, `create_streaming_graph`, `create_graph_with_approval`,

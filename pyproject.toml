@@ -21,6 +21,7 @@ dependencies = [
     "pytest>=7.0.0",
     "sentence-transformers>=3.0.0",
     "jsonschema>=4.0.0",
+    "dspy>=3.2",
 ]
 
 [build-system]

@@ -281,6 +281,23 @@ over a destructive URI merge, so provenance survives.)
 with the `Beta(1,1)` prior — it asymptotes, never saturates. Verification's role is to
 bound confidence at the *grounded* evidence mass (Leak A), not to change that ceiling.
 
+**Candidate verification method (the open "check method" question).** BINEVAL
+(*Ask, Don't Judge: Binary Questions for Interpretable LLM Evaluation and
+Self-Improvement*, arXiv:2606.27226) is a concrete candidate for the faithfulness
+judge: it decomposes evaluation into atomic **binary questions** answered
+independently, yielding calibrated, interpretable, *training-free* scores and
+performing strongest on **factual-consistency** tasks — the shape of the
+claim→source check `eval/faithfulness.py` must emit. It fits SGA's zero-shot,
+no-fine-tune posture and argues for the binary-decomposition route over the
+MCMC-cost ordinal-CLMM tier below (calibration without the fitting cost); its
+question-level decomposition may also upgrade the existing `eval/consistency.py`
+(Consistency@k) independent of the KG. Evaluate it when the `VerifiedClaim`
+brainstorm is green-lit. (Two adjacent references, bearing on *other* reserved
+seams, not this one: biomedical NER/entity-linking benchmark diagnostics —
+ACL 2026.bionlp-1.66 — inform the **reconciliation** eval; full-text biomedical QA
+precision/recall trade-offs — PLOS ONE 10.1371/journal.pone.0351631 — bear on
+abstract-only **extraction** in `graph_builder_node`.)
+
 **`VerifiedClaim` spec contents (when authored):**
 - *v1:* scalar `verified ∈ [0,1]` multiplier on `evidence_weight` (`verified * (0.3 +
   0.65*relevance/100)`); `VerifiedClaim` = an `Evidence`/`WeightedEdge` whose `verified`

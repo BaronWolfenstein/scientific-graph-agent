@@ -18,6 +18,8 @@ from agent_graph.nodes import (
     route_after_approval,
     pubmed_researcher_node,
     dual_audience_node,
+    validate_output_node,
+    route_after_validation,
     hitl_approval_node,
     route_after_hitl,
 )
@@ -468,13 +470,21 @@ def create_demo_graph():
     workflow.add_node("pubmed_researcher", pubmed_researcher_node)
     workflow.add_node("summarizer", summarizer_node)
     workflow.add_node("dual_audience", dual_audience_node)
+    workflow.add_node("validate_output", validate_output_node)
     workflow.add_node("hitl_approval", hitl_approval_node)
 
     workflow.set_entry_point("clarifier")
     workflow.add_edge("clarifier", "pubmed_researcher")
     workflow.add_edge("pubmed_researcher", "summarizer")
     workflow.add_edge("summarizer", "dual_audience")
-    workflow.add_edge("dual_audience", "hitl_approval")
+    # Machine-validate (schema + citation grounding) before the human gate;
+    # invalid drafts loop back to regenerate, bounded by max_iterations.
+    workflow.add_edge("dual_audience", "validate_output")
+    workflow.add_conditional_edges(
+        "validate_output",
+        route_after_validation,
+        {"regenerate": "dual_audience", "approve": "hitl_approval"}
+    )
     workflow.add_conditional_edges(
         "hitl_approval",
         route_after_hitl,

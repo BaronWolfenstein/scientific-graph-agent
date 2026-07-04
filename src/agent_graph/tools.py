@@ -7,8 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import asyncio
 import json
+import time
 import urllib.request
 import urllib.parse
+import urllib.error
 import xml.etree.ElementTree as ET
 
 NCBI_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
@@ -328,6 +330,41 @@ async def search_wikipedia_streaming(topic: str, sentences: int = 5) -> dict:
     return await _fetch_wikipedia_summary_async(topic, sentences, writer)
 
 
+def _abstract_text(article) -> str:
+    """Join all <AbstractText> sections of a PubMed article into one string.
+
+    Always returns a string (never None): handles empty AbstractText, structured
+    multi-section abstracts, and nested markup. Guards downstream consumers that
+    slice `paper['summary']`.
+    """
+    parts = []
+    for el in article.findall(".//AbstractText"):
+        text = "".join(el.itertext()).strip()
+        if text:
+            parts.append(text)
+    return " ".join(parts)
+
+
+def _urlopen_retry(url: str, timeout: int = 15, retries: int = 4, backoff: float = 0.5):
+    """urlopen with exponential backoff on NCBI rate-limiting (HTTP 429) and
+    transient 5xx / connection errors. Other HTTP errors (e.g. 404) are not
+    retried. Returns the response (a context manager)."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            return urllib.request.urlopen(url, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code == 429 or 500 <= e.code < 600:
+                time.sleep(backoff * (2 ** attempt))
+                continue
+            raise
+        except urllib.error.URLError as e:
+            last_err = e
+            time.sleep(backoff * (2 ** attempt))
+    raise last_err
+
+
 def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
     """Fetch PubMed results via NCBI E-utilities (esearch + efetch). No extra deps."""
     # Step 1: esearch — get PMIDs
@@ -338,7 +375,7 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
         "retmode": "json",
     })
     esearch_url = f"{NCBI_BASE}/esearch.fcgi?{params}"
-    with urllib.request.urlopen(esearch_url, timeout=15) as r:
+    with _urlopen_retry(esearch_url, timeout=15) as r:
         data = json.loads(r.read())
     pmids = data.get("esearchresult", {}).get("idlist", [])
     if not pmids:
@@ -352,7 +389,7 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
         "retmode": "xml",
     })
     efetch_url = f"{NCBI_BASE}/efetch.fcgi?{params}"
-    with urllib.request.urlopen(efetch_url, timeout=15) as r:
+    with _urlopen_retry(efetch_url, timeout=15) as r:
         xml_data = r.read()
 
     root = ET.fromstring(xml_data)
@@ -360,7 +397,6 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
     for article in root.findall(".//PubmedArticle"):
         pmid_el = article.find(".//PMID")
         title_el = article.find(".//ArticleTitle")
-        abstract_el = article.find(".//AbstractText")
         year = article.findtext(".//PubDate/Year", "N/A")
 
         author_els = article.findall(".//Author")
@@ -374,7 +410,7 @@ def _fetch_pubmed_results(query: str, max_results: int) -> list[dict]:
         pmid = pmid_el.text if pmid_el is not None else ""
         # ArticleTitle may contain sub-elements (e.g. <i>); collect all text
         title = "".join(title_el.itertext()) if title_el is not None else "Unknown Title"
-        abstract = abstract_el.text if abstract_el is not None else ""
+        abstract = _abstract_text(article)
 
         papers.append({
             "id": pmid,

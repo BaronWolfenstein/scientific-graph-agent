@@ -14,6 +14,38 @@ class ClaimVerification(BaseModel):
     supported: bool = Field(..., description="True if the claim is supported by the provided context")
 
 
+class FaithfulnessScore(BaseModel):
+    supported_fraction: float = Field(
+        ..., ge=0.0, le=1.0,
+        description="Fraction of the summary's factual claims directly supported by the papers")
+    reasoning: str = Field(..., description="Brief justification for the score")
+
+
+def compute_faithfulness_single(summary: str, papers: list, llm=None):
+    """Single-LLM-call faithfulness estimate — the cheaper GEPA-metric variant of
+    `compute_faithfulness` (which makes 1 + N-claim calls). Returns
+    (score, 0, 0) to match the tuple shape. `llm` is injectable for testing.
+    """
+    if not summary or not papers:
+        return 1.0, 0, 0
+
+    llm = llm or get_llm(temperature=0, max_tokens=1024)
+    context = "\n\n".join(
+        f"[Paper {i}] {p.get('title', '')}\n{(p.get('summary') or '')[:600]}"
+        for i, p in enumerate(papers, 1)
+    )
+    result = llm.with_structured_output(FaithfulnessScore).invoke([
+        SystemMessage(content=(
+            "Estimate what fraction of the summary's factual claims are DIRECTLY "
+            "supported by the provided papers. Judge only on what the papers state; "
+            "unsupported or extrapolated claims lower the fraction. "
+            "Return supported_fraction in [0,1]."
+        )),
+        HumanMessage(content=f"Summary:\n{summary}\n\nPapers:\n{context}"),
+    ])
+    return float(result.supported_fraction), 0, 0
+
+
 def _extract_claims(summary: str, llm) -> list[str]:
     structured = llm.with_structured_output(ClaimList)
     result = structured.invoke([

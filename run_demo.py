@@ -10,10 +10,17 @@ prompts for approve/reject, then finalizes or discards.
 """
 import sys
 import logging
+from pathlib import Path
+from dotenv import load_dotenv
 logging.basicConfig(level=logging.WARNING)  # suppress INFO noise during demo
+
+load_dotenv(Path(__file__).parent / ".env")
 
 from langgraph.types import Command
 from agent_graph.graph import create_demo_graph
+
+from langchain_core.globals import set_llm_cache
+set_llm_cache(None)
 
 DEMO_QUERY = (
     "CAR-T cell therapy efficacy and safety in relapsed refractory "
@@ -41,6 +48,17 @@ def main():
 
     # Check whether we stopped at the HITL interrupt
     snapshot = graph.get_state(config)
+
+    # Surface the pre-HITL validation gate (JSON Schema + citation grounding)
+    # so the human sees that drafts were machine-checked before review.
+    val_errors = snapshot.values.get("validation_errors", [])
+    if not val_errors:
+        print("✅ Pre-HITL validation passed (JSON Schema structure + citation grounding).")
+    else:
+        print(f"⚠️  Pre-HITL validation surfaced {len(val_errors)} issue(s) after retries:")
+        for err in val_errors:
+            print(f"     - {err}")
+
     if snapshot.next:
         # Extract interrupt payload from pending tasks
         interrupt_payload = {}

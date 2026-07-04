@@ -10,3 +10,4 @@ dist/
 build/
 *.db
 .DS_Store
+.deepeval/

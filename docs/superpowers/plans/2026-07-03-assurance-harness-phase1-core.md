@@ -269,7 +269,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: `Response` (Task 1). Real deps (injected in tests): `agent_graph.graph.create_graph`, `agent_graph.llm.get_llm`.
 - Produces:
-  - `SGAAdapter(graph=None)` — `id = "sga"`, `run(case)` invokes the compiled graph with `{"query": case["query"], "max_papers": case.get("max_papers", 4)}` and returns `Response(text=summary, contexts=[p["summary"] for p in papers])`.
+  - `SGAAdapter(graph=None)` — `id = "sga"`, `run(case)` invokes the compiled graph with `{"query": case["query"], "max_papers": case.get("max_papers", 4)}` and returns `Response(text=summary, contexts=[p["summary"] for p in papers])`. **thread_id contract:** `case.get("thread_id")` if supplied, else derived per-case (never a shared default) — required because `create_graph()` defaults to `with_checkpointer=True`; a shared thread_id would let conversation state leak across cases in any multi-case harness run, and later across a red-team probe into a subsequent legitimate evaluation.
   - `PathologyAdapter(llm=None)` — `id = "pathology"`, `run(case)` builds a patient-facing explanation of `case["report_text"]`; returns `Response(text=explanation, contexts=[case["report_text"]])`.
 
 - [ ] **Step 1: Write the failing test**
@@ -308,6 +308,36 @@ def test_sga_adapter_maps_summary_and_contexts():
     assert r.contexts == ["abstract about crispr"]
 
 
+class _ThreadCapturingGraph:
+    """Records the thread_id each invoke() call was given, so tests can
+    check cross-case isolation without a real checkpointer."""
+    def __init__(self):
+        self.seen_thread_ids = []
+    def invoke(self, payload, config=None):
+        self.seen_thread_ids.append(config["configurable"]["thread_id"])
+        return {"summary": "x", "papers": []}
+
+
+def test_sga_adapter_default_thread_id_is_unique_per_case():
+    # create_graph() defaults to with_checkpointer=True, so a SHARED default
+    # thread_id would let conversation state leak across unrelated cases in
+    # a multi-case harness run (or, worse, between a red-team probe and a
+    # subsequent legitimate evaluation case). Two calls with no explicit
+    # thread_id must not collide.
+    graph = _ThreadCapturingGraph()
+    a = SGAAdapter(graph=graph)
+    a.run({"query": "case one"})
+    a.run({"query": "case two"})
+    assert len(set(graph.seen_thread_ids)) == 2
+
+
+def test_sga_adapter_honors_explicit_thread_id():
+    graph = _ThreadCapturingGraph()
+    a = SGAAdapter(graph=graph)
+    a.run({"query": "x", "thread_id": "caller-supplied"})
+    assert graph.seen_thread_ids == ["caller-supplied"]
+
+
 def test_pathology_adapter_explains_and_grounds():
     a = PathologyAdapter(llm=_FakeLLM())
     assert a.id == "pathology"
@@ -331,6 +361,8 @@ Create `src/agent_graph/assurance/adapters/sga.py`:
 """SGA literature-summarizer as a SystemUnderTest."""
 from __future__ import annotations
 
+import uuid
+
 from agent_graph.assurance.sut import Response
 
 
@@ -350,7 +382,16 @@ class SGAAdapter:
     def run(self, case: dict) -> Response:
         graph = self._get_graph()
         payload = {"query": case["query"], "max_papers": case.get("max_papers", 4)}
-        config = {"configurable": {"thread_id": case.get("thread_id", "assurance")}}
+        # thread_id MUST be unique per case, not a shared default: create_graph()
+        # defaults to with_checkpointer=True, so a fixed/shared thread_id would
+        # let conversation state accumulate ACROSS unrelated cases in a
+        # multi-case harness run -- and, once red-teaming shares this adapter,
+        # would let adversarial probe content persist into a later legitimate
+        # evaluation case. Derive from the case's own id when present (matches
+        # AssuranceHarness's case_id convention); otherwise a fresh uuid, so
+        # uniqueness never depends on the caller remembering to set one.
+        thread_id = case.get("thread_id") or f"assurance-{case.get('id', uuid.uuid4().hex)}"
+        config = {"configurable": {"thread_id": thread_id}}
         result = graph.invoke(payload, config=config)
         papers = result.get("papers", []) or []
         return Response(
@@ -404,7 +445,7 @@ class PathologyAdapter:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/assurance/test_adapters.py -q`
-Expected: 2 passed.
+Expected: 4 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -834,7 +875,7 @@ Expected: 3 passed.
 - [ ] **Step 5: Run the full Phase-1 suite**
 
 Run: `python -m pytest tests/assurance -q`
-Expected: all pass (13 tests across the phase).
+Expected: all pass (15 tests across the phase).
 
 - [ ] **Step 6: Commit**
 
@@ -853,9 +894,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - **Spec coverage (Phase 1 subset):** SystemUnderTest/Metric protocols (spec §2, §3) → Task 1; legacy metric wrap (§4) → Task 2; SGA + pathology adapters (§3) → Task 3; harness runner + Scorecard with per-adapter metric filtering (§2, §4) → Task 4; report + gates (§11) → Task 5; CLI + Makefile local gate + fixture (§11) → Task 6. Deferred to later phases (documented, not gaps): DeepEval + custom-clinical + RAG metrics (§4 Phase 2), PySpark ETL/store/drift (§7–8 Phase 3), Langfuse + DeepTeam red-team + docker/CI (§9–11 Phase 4), findings-first dataset generation (§5–6 Phase 3).
 - **Placeholder scan:** none; every step has runnable code/commands.
 - **Type consistency:** `Response`/`MetricResult` (Task 1) consumed unchanged in Tasks 2–6; `Metric` triple (`name`, `applies_to`, `score`) implemented identically by `FaithfulnessMetric` (Task 2) and satisfied by the stub metrics; `Scorecard`/`CaseResult` (Task 4) consumed by report (Task 5) and cli (Task 6); adapter `run(case)->Response` matches harness usage.
+- **Correction (2026-07-05, pre-execution):** `SGAAdapter.run()`'s `thread_id` originally defaulted to a fixed `"assurance"` string. Since `create_graph()` defaults to `with_checkpointer=True`, a shared default thread_id would let LangGraph conversation state accumulate across unrelated cases in any multi-case `AssuranceHarness.run()` — and, once the security-focused phase (see Phasing) shares this adapter, would let adversarial red-team probe content persist into a subsequently-evaluated legitimate case. Fixed to derive a per-case thread_id (never a shared default); two new tests added to Task 3's `test_adapters.py` (`test_sga_adapter_default_thread_id_is_unique_per_case`, `test_sga_adapter_honors_explicit_thread_id`); Task 3/6 expected pass counts updated (4 / 15).
 
 ## Phasing (rest of the spec, each its own plan when reached)
 
 - **Phase 2 — Metric expansion:** DeepEval backbone (G-Eval/Hallucination/Bias/Toxicity/Contextual\*, judge=`ChatAnthropic`), custom clinical metrics (ClinicalAppropriateness, PatientSafety, DiagnosisSycophancy), consistency@k wrap. Verify DeepEval's current custom-model + metric API at plan time.
+- **Phase 2-security (reordered ahead of Phase 3, 2026-07-05):** DeepTeam-backed red-teaming — RAG prompt-injection/context-poisoning (SGA's actual novel attack surface), PII leakage, HITL-gate-bypass, agent-authority vulnerabilities. Reuses Phase 2's `SGAJudgeLLM` as DeepTeam's simulator/evaluation model. See its own plan (2026-07-05-assurance-harness-phase2-security.md).
 - **Phase 3 — Data & monitoring:** findings-first pathology dataset + literature gold answers, PySpark ETL (lineage/versioning), run-store, PSI/KS drift. Verify PySpark local-mode API at plan time.
-- **Phase 4 — Red-team, observability, infra:** DeepTeam attack suite, Langfuse exporter + docker-compose, optional Dockerfile, minimal GitHub workflow, README competency-map. Verify DeepTeam + Langfuse APIs at plan time.
+- **Phase 4 — Observability, infra:** Langfuse exporter + docker-compose, optional Dockerfile, minimal GitHub workflow, README competency-map. Verify Langfuse API at plan time. (DeepTeam moved to Phase 2-security, above.)

@@ -10,6 +10,10 @@ from agent_graph.state import InputState, OutputState, PrivateState, InternalSta
 from agent_graph.tools import search_arxiv, search_arxiv_streaming, search_wikipedia, search_wikipedia_streaming, search_pubmed
 from agent_graph.reranker import score_papers, apply_dropoff, final_relevance_score, CANDIDATE_FETCH
 from agent_graph.schemas import ClinicianSummary, TechnicalSummary, Evidence
+from agent_graph.kg import get_knowledge_graph
+from agent_graph.kg.extract import TripletExtraction
+from agent_graph.kg.extract import EXTRACTION_PROMPT as EXTRACTION_PROMPT_HEADER
+from agent_graph.kg.ontology import paper_uri
 
 
 import logging
@@ -349,6 +353,62 @@ Relevance Score (1-100):""", name="User")
             )
         ]
     }
+
+
+def _pub_year(published: str):
+    """Parse a leading 4-digit year from a published-date string."""
+    import re
+    if not published:
+        return None
+    m = re.search(r"(19|20)\d{2}", str(published))
+    return int(m.group(0)) if m else None
+
+
+def graph_builder_node(state):
+    """Extract ontology-constrained claims from papers into the knowledge graph.
+
+    Best-effort: a paper whose extraction fails is skipped, never blocking the
+    pipeline. Also materializes free author --wrote--> paper edges from metadata.
+    Runs after the researcher, before the summarizer.
+    """
+    papers = state.get("papers", [])
+    kg = state.get("knowledge_graph") or get_knowledge_graph()
+    llm = get_llm(temperature=0).with_structured_output(TripletExtraction)
+
+    for p in papers:
+        p_uri = paper_uri(paper_id=p.get("id"), pmid=p.get("pmid"))
+        relevance = p.get("relevance_score", 50)
+        year = _pub_year(p.get("published"))
+
+        # claim extraction (best-effort)
+        try:
+            extraction = llm.invoke([
+                SystemMessage(content=EXTRACTION_PROMPT_HEADER),
+                HumanMessage(content=f"{p.get('title','')}\n\n{p.get('summary','')}"),
+            ])
+            triplets = extraction.triplets
+        except Exception as exc:
+            logging.warning(f"⚠️  KG extraction failed for paper {p.get('id')}: {exc}")
+            triplets = []
+
+        for t in triplets:
+            kg.add_relation(
+                t.subject, t.subject_type, t.relation, t.object, t.object_type,
+                {"paper_uri": p_uri, "pmid": p.get("pmid"), "paper_id": p.get("id"),
+                 "pub_year": year, "relevance": relevance, "polarity": t.polarity,
+                 "snippet": p.get("title", "")[:160]},
+            )
+
+        # free authorship edges from existing metadata
+        for author in p.get("authors", [])[:5]:
+            kg.add_relation(
+                author, "author", "wrote", p_uri, "paper",
+                {"paper_uri": p_uri, "pmid": p.get("pmid"), "paper_id": p.get("id"),
+                 "pub_year": year, "relevance": relevance, "polarity": "supports",
+                 "snippet": "authorship"},
+            )
+
+    return {"knowledge_graph": kg}
 
 
 def summarizer_node(state: InternalState) -> OutputState:

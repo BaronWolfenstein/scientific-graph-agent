@@ -445,7 +445,13 @@ def summarizer_node(state: InternalState) -> OutputState:
         f"URL: {p['url']}"
         for i, p in enumerate(papers)
     ])
-    
+
+    graph_context = ""
+    kg = state.get("knowledge_graph")
+    if kg is not None:
+        edges = kg.query(query.split(), min_confidence=0.4, max_depth=2)
+        graph_context = kg.to_context(edges)
+
     messages = [
         SystemMessage(content="""You are an expert scientific assistant. Respond in English only.
         Create a concise summary with:
@@ -464,9 +470,11 @@ def summarizer_node(state: InternalState) -> OutputState:
         [Paper 1] Title - Authors (Year) - URL
         ..."""),
         HumanMessage(content=f"""Original question: {query}
-        
+
 Papers found:
 {papers_context}
+
+{graph_context}
 
 Generate a structured summary.""", name="User")
     ]

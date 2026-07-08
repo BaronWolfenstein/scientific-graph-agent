@@ -8,6 +8,7 @@ from operator import add
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage
 
 from agent_graph.llm import get_llm
+from agent_graph.kg import merge_graphs
 
 # === REDUCERS ===
 
@@ -133,7 +134,8 @@ class InternalState(InputState, OutputState):
     refined_queries: NotRequired[List[str]]  # Multiple refined queries (map-reduce mode)
     iteration: Annotated[int, take_max]  # Loop counter for retry logic (uses max to handle concurrent updates)
     approved: NotRequired[bool]  # Approval status from approver node
-    
+    knowledge_graph: Annotated[NotRequired[object], merge_graphs]  # domain KG (OxigraphKG)
+
 class PrivateState(TypedDict):
     """Private state for internal node processing."""
     refined_query: NotRequired[str]  # Refined query after clarification (single mode)

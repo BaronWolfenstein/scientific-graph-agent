@@ -170,6 +170,32 @@ print(f"\n{result['summary']}")
 - **Time Travel Debugging**: Replay from any checkpoint state
 - **Full Observability**: LangSmith tracing + LangGraph Studio visualization
 
+## Spectral layer
+
+An additive spectral graph layer (`src/agent_graph/spectral/`) provides the
+structural-confidence leg of the KG confidence toolkit: it adapts the
+RDF-star claim graph in a `pyoxigraph.Store` into a `networkx.Graph`, then
+computes the Laplacian spectrum, community structure, and bridging
+centrality over it, and persists versioned snapshots as first-class KG
+nodes. It does not modify the KG package or the flat-paper pipeline.
+
+Public API (`agent_graph.spectral`):
+
+- `build_entity_graph(store, *, predicates=None, weight_by_confidence=True) -> networkx.Graph`
+- `combinatorial_laplacian(G) -> tuple[list[str], scipy.sparse.csr_matrix]`
+- `spectral_embedding(G, k=8) -> tuple[list[str], numpy.ndarray]`
+- `spectral_gap(G, k=8) -> list[float]`
+- `detect_communities(G, method="louvain", resolution=1.0, seed=0) -> dict[str, int]`
+- `bridging_centrality(G) -> dict[str, float]`
+- `SpectralSnapshot` dataclass + `write_spectral_snapshot(store, snapshot, *, graph_name=...) -> str`
+
+Run the end-to-end demo (builds a small toy claim graph, then runs
+adapter → gap → communities → bridging → snapshot):
+
+```bash
+python run_spectral_demo.py
+```
+
 ## Resources
 
 - **LangGraph Documentation**: https://langchain-ai.github.io/langgraph/

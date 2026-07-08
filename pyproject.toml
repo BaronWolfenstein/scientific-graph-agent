@@ -16,6 +16,7 @@ dependencies = [
     "arxiv>=2.0.0",
     "wikipedia>=1.4.0",
     "python-dotenv>=1.0.0",
+    "pyoxigraph>=0.5",
     "langchain>=0.3.0",
     "aiosqlite",
     "pytest>=7.0.0",

@@ -238,6 +238,38 @@ class OxigraphKG:
                  reverse=True)
         return out
 
+    def to_dict(self) -> dict:
+        buf = io.BytesIO()
+        self.store.dump(buf, ox.RdfFormat.N_QUADS)
+        return {"nquads": buf.getvalue().decode("utf-8")}
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        store = ox.Store()
+        store.load(io.BytesIO(data["nquads"].encode("utf-8")), format=ox.RdfFormat.N_QUADS)
+        return cls(store)
+
+    def iter_claims(self):
+        for q in self.store.quads_for_pattern(None, _REIFIES, None, None):
+            claim = q.object  # ox.Triple
+            yield claim.subject, claim.predicate, claim.object, self._evidence(q.subject)
+
+    def merge_from(self, other):
+        for s, p, o, ev in other.iter_claims():
+            claim = ox.Triple(s, p, o)
+            self.store.add(ox.Quad(s, p, o))
+            r = self._reifier_for(claim)
+            if r is None:
+                r = ox.BlankNode()
+                self.store.add(ox.Quad(r, _REIFIES, claim))
+                existing = []
+            else:
+                existing = self._evidence(r)
+            self._write_annotations(r, existing + ev)
+            rel = p.value.replace(ont.KG, "")
+            self._flag_conflicts(rel, s, o)
+        return self
+
     def to_context(self, edges, limit=25):
         if not edges:
             return ""

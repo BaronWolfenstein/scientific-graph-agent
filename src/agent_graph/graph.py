@@ -17,6 +17,7 @@ from agent_graph.nodes import (
     approver_node,
     route_after_approval,
     pubmed_researcher_node,
+    graph_builder_node,
     dual_audience_node,
     hitl_approval_node,
     route_after_hitl,
@@ -466,13 +467,15 @@ def create_demo_graph():
 
     workflow.add_node("clarifier", clarifier_node)
     workflow.add_node("pubmed_researcher", pubmed_researcher_node)
+    workflow.add_node("graph_builder", graph_builder_node)
     workflow.add_node("summarizer", summarizer_node)
     workflow.add_node("dual_audience", dual_audience_node)
     workflow.add_node("hitl_approval", hitl_approval_node)
 
     workflow.set_entry_point("clarifier")
     workflow.add_edge("clarifier", "pubmed_researcher")
-    workflow.add_edge("pubmed_researcher", "summarizer")
+    workflow.add_edge("pubmed_researcher", "graph_builder")
+    workflow.add_edge("graph_builder", "summarizer")
     workflow.add_edge("summarizer", "dual_audience")
     workflow.add_edge("dual_audience", "hitl_approval")
     workflow.add_conditional_edges(

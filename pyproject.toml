@@ -19,6 +19,8 @@ dependencies = [
     "pyoxigraph>=0.5",
     "networkx>=3.2",
     "scipy>=1.11",
+    "matplotlib>=3.7",
+    "gradio>=4.0",
     "langchain>=0.3.0",
     "aiosqlite",
     "pytest>=7.0.0",

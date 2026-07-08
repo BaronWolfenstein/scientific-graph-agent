@@ -172,3 +172,84 @@ class OxigraphKG:
             elif local == "contested":
                 m[local] = (v == "true")
         return m
+
+    # ---- weighted BFS query + prompt context serialization ----
+    def _exists(self, node) -> bool:
+        for q in self.store.quads_for_pattern(node, None, None, None):
+            if q.predicate.value.replace(ont.KG, "") in _EDGE_PREDICATES:
+                return True
+        for q in self.store.quads_for_pattern(None, None, node, None):
+            if q.predicate.value.replace(ont.KG, "") in _EDGE_PREDICATES:
+                return True
+        return False
+
+    def _seed_nodes(self, entities):
+        seeds = []
+        for name in entities:
+            for et in ont.ENTITY_TYPES:
+                node = self._node(et, name)
+                if self._exists(node):
+                    seeds.append(node)
+        return seeds
+
+    def query(self, entities, relation_hints=None, max_depth=2,
+              min_confidence=0.0, as_of_year=None):
+        hints = {h.lower().strip() for h in (relation_hints or [])}
+        frontier = [(n, 0) for n in self._seed_nodes(entities)]
+        seen_nodes = {n.value for n, _ in frontier}
+        seen_edges, out = set(), []
+        i = 0
+        while i < len(frontier):
+            node, depth = frontier[i]
+            i += 1
+            if depth >= max_depth:
+                continue
+            candidates = []
+            for q in self.store.quads_for_pattern(node, None, None, None):
+                candidates.append((q.subject, q.predicate, q.object))
+            for q in self.store.quads_for_pattern(None, None, node, None):
+                candidates.append((q.subject, q.predicate, q.object))
+            for s, p, o in candidates:
+                rel = p.value.replace(ont.KG, "")
+                if rel not in _EDGE_PREDICATES:
+                    continue
+                ekey = (s.value, rel, o.value)
+                if ekey in seen_edges:
+                    continue
+                r = self._reifier_for(ox.Triple(s, p, o))
+                meta = self._reifier_meta(r) if r is not None else None
+                if meta is None or meta["confidence"] < min_confidence:
+                    continue
+                if as_of_year is not None and meta["first_year"] and meta["first_year"] > as_of_year:
+                    continue
+                seen_edges.add(ekey)
+                out.append({
+                    "subject": s.value, "relation": rel, "object": o.value,
+                    "confidence": meta["confidence"], "confidence_lb": meta["confidence_lb"],
+                    "support": meta["support"], "contested": meta["contested"],
+                    "years": (meta["first_year"], meta["last_year"]),
+                    "hint_match": rel in hints,
+                })
+                for nxt in (s, o):
+                    if nxt.value not in seen_nodes:
+                        seen_nodes.add(nxt.value)
+                        frontier.append((nxt, depth + 1))
+        out.sort(key=lambda e: (e["hint_match"], e["confidence_lb"], e["years"][1] or 0),
+                 reverse=True)
+        return out
+
+    def to_context(self, edges, limit=25):
+        if not edges:
+            return ""
+        lines = ["Structured evidence from the literature graph:"]
+        for e in edges[:limit]:
+            subj = e["subject"].split("/")[-1]
+            obj = e["object"].split("/")[-1]
+            yr = e["years"][1]
+            flag = " ⚠CONTESTED" if e["contested"] else ""
+            lines.append(
+                f"  - {subj} --[{e['relation']}]--> {obj} "
+                f"(confidence {e['confidence']:.2f}, {e['support']} paper(s)"
+                f"{f', latest {yr}' if yr else ''}){flag}"
+            )
+        return "\n".join(lines)

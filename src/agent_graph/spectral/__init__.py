@@ -10,9 +10,14 @@ from .laplacian import combinatorial_laplacian, spectral_embedding, spectral_gap
 from .communities import detect_communities
 from .centrality import bridging_centrality
 from .snapshots import SpectralSnapshot, write_spectral_snapshot
+from .transport import (
+    sinkhorn_divergence, heat_kernel_cost, gromov_wasserstein, graph_gw_distance,
+)
 
 __all__ = [
     "build_entity_graph", "combinatorial_laplacian", "spectral_embedding",
     "spectral_gap", "detect_communities", "bridging_centrality",
     "SpectralSnapshot", "write_spectral_snapshot",
+    "sinkhorn_divergence", "heat_kernel_cost", "gromov_wasserstein",
+    "graph_gw_distance",
 ]

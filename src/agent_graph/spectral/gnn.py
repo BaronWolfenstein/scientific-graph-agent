@@ -27,46 +27,72 @@ def normalized_adjacency(G: nx.Graph, nodes=None) -> tuple[list, np.ndarray]:
     return nodes, d_inv_sqrt[:, None] * A * d_inv_sqrt[None, :]
 
 
-def sgc_propagate(Ahat: np.ndarray, X: np.ndarray, k: int = 2) -> np.ndarray:
-    """k-hop spectral feature propagation ``Â^k X`` (the SGC feature map)."""
-    H = np.asarray(X, dtype=float)
-    for _ in range(k):
-        H = Ahat @ H
-    return H
+def _xp_for(backend: str):
+    """Array namespace for the SGC matmuls: cupy on the GPU box (``backend='gpu'``
+    or ``'auto'`` when CuPy is present), else numpy. Lazy CuPy import."""
+    from .gpu import resolve_backend
+    if resolve_backend(backend) == "gpu":
+        import cupy as cp
+        return cp
+    return np
 
 
-def _softmax(Z: np.ndarray) -> np.ndarray:
+def _to_host(a) -> np.ndarray:
+    return a.get() if hasattr(a, "get") else np.asarray(a)   # cupy -> numpy
+
+
+def _softmax(Z, xp):
     Z = Z - Z.max(axis=1, keepdims=True)
-    e = np.exp(Z)
+    e = xp.exp(Z)
     return e / e.sum(axis=1, keepdims=True)
+
+
+def sgc_propagate(Ahat, X, k: int = 2, backend: str = "cpu") -> np.ndarray:
+    """k-hop spectral feature propagation ``Â^k X`` (the SGC feature map). Runs the
+    matmuls on GPU when ``backend='gpu'``; always returns host numpy."""
+    xp = _xp_for(backend)
+    H = xp.asarray(X, dtype=float)
+    Ah = xp.asarray(Ahat, dtype=float)
+    for _ in range(k):
+        H = Ah @ H
+    return _to_host(H)
 
 
 def train_sgc(Ahat, X, y, labeled_idx, *, k: int = 2, n_classes=None,
               epochs: int = 300, lr: float = 0.5, l2: float = 1e-3,
-              seed: int = 0) -> np.ndarray:
+              seed: int = 0, backend: str = "cpu") -> np.ndarray:
     """Train the SGC softmax head on the ``labeled_idx`` nodes only (semi-supervised
     node classification). Features are propagated once (``Â^k X``); the classifier
-    is L2-regularized softmax regression trained by analytic gradient descent.
-    Returns weights ``W`` of shape ``(feat_dim, n_classes)``."""
-    H = sgc_propagate(Ahat, X, k)                   # (n, d)
+    is L2-regularized softmax regression trained by analytic gradient descent. The
+    propagation and training matmuls run on GPU when ``backend='gpu'``; returns
+    host-numpy weights ``W`` of shape ``(feat_dim, n_classes)``."""
+    xp = _xp_for(backend)
     y = np.asarray(y)
     labeled_idx = np.asarray(labeled_idx)
     if n_classes is None:
         n_classes = int(y[labeled_idx].max()) + 1
-    d = H.shape[1]
-    rng = np.random.default_rng(seed)
-    W = 0.01 * rng.standard_normal((d, n_classes))
-    Hl = H[labeled_idx]                             # (m, d)
-    Yl = np.zeros((len(labeled_idx), n_classes))
-    Yl[np.arange(len(labeled_idx)), y[labeled_idx]] = 1.0
+    Ah = xp.asarray(Ahat, dtype=float)
+    H = xp.asarray(X, dtype=float)
+    for _ in range(k):
+        H = Ah @ H                                  # propagate Â^k X on-device
+    Hl = H[xp.asarray(labeled_idx)]                 # (m, d)
+    d = Hl.shape[1]
+    W = xp.asarray(0.01 * np.random.default_rng(seed).standard_normal((d, n_classes)))
+    Yl = xp.zeros((len(labeled_idx), n_classes))
+    Yl[xp.arange(len(labeled_idx)), xp.asarray(y[labeled_idx])] = 1.0
     for _ in range(epochs):
-        P = _softmax(Hl @ W)                        # (m, C)
+        P = _softmax(Hl @ W, xp)                    # (m, C)
         grad = Hl.T @ (P - Yl) / len(labeled_idx) + l2 * W
-        W -= lr * grad
-    return W
+        W = W - lr * grad
+    return _to_host(W)
 
 
-def sgc_predict(Ahat, X, W, k: int = 2) -> np.ndarray:
-    """Predicted class per node: ``argmax softmax(Â^k X · W)``."""
-    H = sgc_propagate(Ahat, X, k)
-    return _softmax(H @ W).argmax(axis=1)
+def sgc_predict(Ahat, X, W, k: int = 2, backend: str = "cpu") -> np.ndarray:
+    """Predicted class per node: ``argmax softmax(Â^k X · W)`` (host numpy out)."""
+    xp = _xp_for(backend)
+    H = xp.asarray(X, dtype=float)
+    Ah = xp.asarray(Ahat, dtype=float)
+    for _ in range(k):
+        H = Ah @ H
+    pred = _softmax(H @ xp.asarray(W, dtype=float), xp).argmax(axis=1)
+    return _to_host(pred)

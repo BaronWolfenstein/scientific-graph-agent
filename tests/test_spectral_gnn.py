@@ -3,6 +3,7 @@ feature propagation Â^k X + a softmax classifier; a spectral node-classificatio
 baseline over the entity graph. CPU/numpy, fully testable."""
 import numpy as np
 import networkx as nx
+import pytest
 
 from agent_graph.spectral.gnn import (
     normalized_adjacency, sgc_propagate, train_sgc, sgc_predict,
@@ -55,3 +56,19 @@ def test_sgc_recovers_planted_communities_semi_supervised():
     assert got["a"] == got["b"] == got["c"]      # community 1 recovered
     assert got["x"] == got["y"] == got["z"]      # community 2 recovered
     assert got["a"] != got["x"]
+
+
+def test_sgc_gpu_matches_cpu_predictions():
+    pytest.importorskip("cupy")     # skips off-box; runs on a CuPy/GPU box
+    G = _bridged_triangles()
+    nodes, Ahat = normalized_adjacency(G)
+    X = np.eye(len(nodes))
+    comm = {"a": 0, "b": 0, "c": 0, "x": 1, "y": 1, "z": 1}
+    y = np.array([comm[n] for n in nodes])
+    labeled = [nodes.index("a"), nodes.index("x")]
+    kw = dict(k=2, n_classes=2, epochs=400, lr=0.5, seed=0)
+    Wc = train_sgc(Ahat, X, y, labeled, backend="cpu", **kw)
+    Wg = train_sgc(Ahat, X, y, labeled, backend="gpu", **kw)
+    pc = sgc_predict(Ahat, X, Wc, k=2, backend="cpu")
+    pg = sgc_predict(Ahat, X, Wg, k=2, backend="gpu")
+    assert np.array_equal(pc, pg)   # cpu and gpu SGC agree on the labels

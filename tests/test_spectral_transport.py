@@ -144,3 +144,12 @@ def test_graph_gw_distance_is_symmetric():
     star = nx.star_graph(4); nx.set_edge_attributes(star, 1.0, "weight")
     assert np.isclose(graph_gw_distance(path, star, t=0.5, eps=0.02),
                       graph_gw_distance(star, path, t=0.5, eps=0.02), atol=1e-6)
+
+
+def test_heat_kernel_cost_gpu_matches_cpu():
+    import pytest
+    pytest.importorskip("cupy")     # skips off-box; runs on a CuPy/GPU box
+    G = _bridged_triangles()
+    _, c_cpu = heat_kernel_cost(G, t=0.5, backend="cpu")
+    _, c_gpu = heat_kernel_cost(G, t=0.5, backend="gpu")
+    assert np.allclose(c_cpu, c_gpu, atol=1e-6)   # sign-invariant diffusion cost

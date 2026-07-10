@@ -78,7 +78,7 @@ def sinkhorn_divergence(X: np.ndarray, Y: np.ndarray, *, eps: float = 0.1,
     return oxy - 0.5 * oxx - 0.5 * oyy
 
 
-def heat_kernel_cost(G, *, t: float = 1.0, k: int = 8):
+def heat_kernel_cost(G, *, t: float = 1.0, k: int = 8, backend: str = "cpu"):
     """Structural cost matrix from the Laplacian diffusion geometry.
 
     Returns ``(nodes, C)`` where ``C[x, y] = sum_i e^{-2 t lam_i} (phi_i(x) -
@@ -86,11 +86,21 @@ def heat_kernel_cost(G, *, t: float = 1.0, k: int = 8):
     smallest Laplacian eigenpairs (the modes with the largest diffusion weight).
     This is the intra-graph cost GW consumes — the spectrum→OT bridge. The
     trivial constant eigenvector contributes zero and is harmless to include.
+
+    ``backend='gpu'`` (or ``'auto'``) computes the eigenpairs on GPU (CuPy) via
+    ``spectral.gpu.small_eigpairs_gpu``; the result is host numpy, so ``C`` is
+    identical to the CPU path (the diffusion-distance matrix is invariant to the
+    per-eigenvector sign ambiguity). Default ``'cpu'`` is unchanged.
     """
+    from .gpu import resolve_backend
+
     nodes, L = combinatorial_laplacian(G)
     n = L.shape[0]
     k_eff = min(k, n)
-    if n <= 12:
+    if resolve_backend(backend) == "gpu":
+        from .gpu import small_eigpairs_gpu
+        w, V = small_eigpairs_gpu(L, k_eff)
+    elif n <= 12:
         w, V = np.linalg.eigh(L.toarray())          # ascending
         w, V = w[:k_eff], V[:, :k_eff]
     else:

@@ -83,6 +83,19 @@ def small_eigs_gpu(L, k: int) -> np.ndarray:
     return cp.asnumpy(cp.sort(w)[: k + 1])
 
 
+def small_eigpairs_gpu(L, k: int):
+    """Smallest ``k`` Laplacian eigenpairs ``(w ascending, V)`` as host numpy —
+    CuPy dense ``eigh``. Feeds the diffusion map in ``heat_kernel_cost`` (needs
+    eigenvalues AND eigenvectors, unlike ``spectral_embedding_gpu``)."""
+    import cupy as cp
+    w, V = cp.linalg.eigh(cp.asarray(L.toarray()))
+    order = cp.argsort(w)
+    k_eff = min(k, L.shape[0])
+    w = w[order][:k_eff]
+    V = V[:, order][:, :k_eff]
+    return cp.asnumpy(w), cp.asnumpy(V)
+
+
 def spectral_embedding_gpu(L, k: int) -> np.ndarray:
     """Laplacian-eigenmap coordinates (host numpy): drop the trivial constant
     eigenvector, take the next ``k`` — CuPy dense ``eigh``. Mirrors the CPU dense

@@ -18,13 +18,12 @@ def detect_communities(
     backend: str = "cpu",
 ) -> dict[str, int]:
     if resolve_backend(backend) == "gpu":
-        if method != "louvain":
-            raise ValueError(
-                f"gpu backend supports method='louvain' only (got {method!r}); "
-                "cuGraph Leiden is a follow-up"
-            )
-        from .gpu import louvain_gpu
-        return louvain_gpu(G, resolution=resolution)
+        from .gpu import louvain_gpu, leiden_gpu
+        if method == "louvain":
+            return louvain_gpu(G, resolution=resolution)
+        if method == "leiden":
+            return leiden_gpu(G, resolution=resolution)
+        raise ValueError(f"unknown method: {method!r} (use 'louvain' or 'leiden')")
     if method == "louvain":
         comms = nx.community.louvain_communities(
             G, weight="weight", resolution=resolution, seed=seed

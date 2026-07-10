@@ -31,19 +31,17 @@ def resolve_backend(backend: str) -> str:
     return backend
 
 
-def louvain_gpu(G, resolution: float = 1.0) -> dict:
-    """cuGraph Louvain community detection -> ``dict[node -> community_id]``, the
-    same contract as the CPU path. NOTE: this is a *different algorithm instance*
-    than networkx Louvain (both are stochastic / implementation-specific), so it
-    recovers the same community STRUCTURE on well-separated graphs, not identical
-    labels. Lazy-imports cuGraph/cuDF; validated on-box (the parity test skips
-    off-box). API is cuGraph-version-sensitive (partition column / resolution)."""
+def _cugraph_partition(G, algo, resolution: float) -> dict:
+    """Run a cuGraph partitioning algo (``cugraph.louvain`` / ``cugraph.leiden``)
+    on ``G`` and return ``dict[node -> community_id]`` (same contract as the CPU
+    path). Lazy-imports cuGraph/cuDF; validated on-box (the tests skip off-box).
+    API is cuGraph-version-sensitive (``vertex``/``partition`` columns, resolution)."""
     import cudf
-    import cugraph
 
     nodes = list(G.nodes())
     if G.number_of_edges() == 0:
         return {n: i for i, n in enumerate(nodes)}     # each node its own community
+    import cugraph  # noqa: F401  (imported by caller too; kept for clarity)
     idx = {n: i for i, n in enumerate(nodes)}
     src = [idx[u] for u, v in G.edges()]
     dst = [idx[v] for u, v in G.edges()]
@@ -52,10 +50,29 @@ def louvain_gpu(G, resolution: float = 1.0) -> dict:
     Gc = cugraph.Graph()                                # undirected
     Gc.from_cudf_edgelist(df, source="src", destination="dst",
                           edge_attr="weight", renumber=True)
-    parts, _modularity = cugraph.louvain(Gc, resolution=resolution)
+    parts, _modularity = algo(Gc, resolution=resolution)
     pdf = parts.to_pandas()
     vertex_to_part = dict(zip(pdf["vertex"], pdf["partition"]))
     return {nodes[v]: int(vertex_to_part[v]) for v in range(len(nodes))}
+
+
+def louvain_gpu(G, resolution: float = 1.0) -> dict:
+    """cuGraph Louvain -> ``dict[node -> community_id]``. A *different algorithm
+    instance* than networkx Louvain (both stochastic / implementation-specific), so
+    it recovers the same community STRUCTURE on well-separated graphs, not identical
+    labels."""
+    import cugraph
+    return _cugraph_partition(G, cugraph.louvain, resolution)
+
+
+def leiden_gpu(G, resolution: float = 1.0) -> dict:
+    """cuGraph Leiden -> ``dict[node -> community_id]``. Leiden (Traag et al. 2019)
+    guarantees **well-connected** communities — fixing Louvain's known defect of
+    occasionally producing internally-disconnected communities — and is typically
+    faster / higher-modularity. Same contract; recovers structure, not identical
+    labels vs the CPU igraph/leidenalg path."""
+    import cugraph
+    return _cugraph_partition(G, cugraph.leiden, resolution)
 
 
 def small_eigs_gpu(L, k: int) -> np.ndarray:

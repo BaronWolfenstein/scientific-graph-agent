@@ -48,3 +48,13 @@ def test_gpu_louvain_recovers_planted_communities():
     assert part["a"] == part["b"] == part["c"]      # triangle 1 together
     assert part["x"] == part["y"] == part["z"]      # triangle 2 together
     assert part["a"] != part["x"]                   # the two triangles split
+
+
+def test_gpu_leiden_recovers_planted_communities():
+    pytest.importorskip("cugraph")
+    from agent_graph.spectral.communities import detect_communities
+    G = _graph()
+    part = detect_communities(G, method="leiden", backend="gpu")
+    assert part["a"] == part["b"] == part["c"]
+    assert part["x"] == part["y"] == part["z"]
+    assert part["a"] != part["x"]

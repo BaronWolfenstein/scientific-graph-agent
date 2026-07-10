@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 leiden = ["python-igraph>=0.11", "leidenalg>=0.10"]
-gpu = ["cugraph-cu12>=24.06"]
+gpu = ["cugraph-cu12>=24.06", "cupy-cuda12x>=12"]  # cuGraph builds graphs; CuPy does the eig
 finetune = [  # QLoRA — CUDA only (bitsandbytes 4-bit); install on the A100 box
     "torch>=2.2",
     "transformers>=4.44",

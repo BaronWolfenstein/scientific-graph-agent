@@ -1,14 +1,30 @@
 """Community detection on the entity graph. Louvain (networkx built-in, no
 extra deps) is the default; Leiden is available via the `leiden` extra and is
-lazy-imported so CPU-only installs don't require igraph/leidenalg."""
+lazy-imported so CPU-only installs don't require igraph/leidenalg.
+
+An optional GPU backend (`backend="gpu"`, or `"auto"`) runs cuGraph Louvain via
+`spectral.gpu` (gated behind the `[gpu]` extra). Note: cuGraph Louvain is a
+different algorithm instance than networkx Louvain, so it recovers the same
+community *structure* on well-separated graphs, not identical labels."""
 from __future__ import annotations
 
 import networkx as nx
 
+from .gpu import resolve_backend
+
 
 def detect_communities(
-    G: nx.Graph, method: str = "louvain", resolution: float = 1.0, seed: int = 0
+    G: nx.Graph, method: str = "louvain", resolution: float = 1.0, seed: int = 0,
+    backend: str = "cpu",
 ) -> dict[str, int]:
+    if resolve_backend(backend) == "gpu":
+        if method != "louvain":
+            raise ValueError(
+                f"gpu backend supports method='louvain' only (got {method!r}); "
+                "cuGraph Leiden is a follow-up"
+            )
+        from .gpu import louvain_gpu
+        return louvain_gpu(G, resolution=resolution)
     if method == "louvain":
         comms = nx.community.louvain_communities(
             G, weight="weight", resolution=resolution, seed=seed

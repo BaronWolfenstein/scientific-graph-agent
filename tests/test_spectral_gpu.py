@@ -37,3 +37,14 @@ def test_gpu_spectral_embedding_matches_cpu_up_to_sign():
         return np.sqrt((d ** 2).sum(axis=2))
 
     assert np.allclose(pdist(cpu), pdist(gpu), atol=1e-6)
+
+
+def test_gpu_louvain_recovers_planted_communities():
+    pytest.importorskip("cugraph")
+    from agent_graph.spectral.communities import detect_communities
+    G = _graph()   # two triangles joined by a single weak bridge (b-x)
+    part = detect_communities(G, method="louvain", backend="gpu")
+    # cuGraph Louvain won't match networkx labels, but must recover the STRUCTURE:
+    assert part["a"] == part["b"] == part["c"]      # triangle 1 together
+    assert part["x"] == part["y"] == part["z"]      # triangle 2 together
+    assert part["a"] != part["x"]                   # the two triangles split

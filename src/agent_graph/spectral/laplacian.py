@@ -22,12 +22,7 @@ def combinatorial_laplacian(G: nx.Graph) -> tuple[list[str], sp.csr_matrix]:
     return nodes, L.tocsr()
 
 
-def _resolve_backend(backend: str) -> str:
-    """'auto' -> 'gpu' if CuPy is importable, else 'cpu'. 'cpu'/'gpu' pass through."""
-    if backend == "auto":
-        from .gpu import gpu_available
-        return "gpu" if gpu_available() else "cpu"
-    return backend
+from .gpu import resolve_backend as _resolve_backend  # noqa: E402
 
 
 def _small_eigs(L: sp.csr_matrix, k: int, backend: str = "cpu") -> np.ndarray:

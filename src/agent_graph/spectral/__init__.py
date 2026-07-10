@@ -13,6 +13,7 @@ from .snapshots import SpectralSnapshot, write_spectral_snapshot
 from .transport import (
     sinkhorn_divergence, heat_kernel_cost, gromov_wasserstein, graph_gw_distance,
 )
+from .gnn import normalized_adjacency, sgc_propagate, train_sgc, sgc_predict
 
 __all__ = [
     "build_entity_graph", "combinatorial_laplacian", "spectral_embedding",
@@ -20,4 +21,5 @@ __all__ = [
     "SpectralSnapshot", "write_spectral_snapshot",
     "sinkhorn_divergence", "heat_kernel_cost", "gromov_wasserstein",
     "graph_gw_distance",
+    "normalized_adjacency", "sgc_propagate", "train_sgc", "sgc_predict",
 ]
